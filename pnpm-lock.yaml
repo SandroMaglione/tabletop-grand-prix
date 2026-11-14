@@ -17,9 +17,6 @@ importers:
       '@typeonce/ritmo-browser':
         specifier: 0.23.0
         version: 0.23.0(typescript@7.0.2)
-      earcut:
-        specifier: ^3.2.4
-        version: 3.2.4
       pixi.js:
         specifier: 8.23.0
         version: 8.23.0

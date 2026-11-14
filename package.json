@@ -18,7 +18,6 @@
     "@pixi/3d": "0.1.0",
     "@typeonce/ritmo": "0.23.0",
     "@typeonce/ritmo-browser": "0.23.0",
-    "earcut": "^3.2.4",
     "pixi.js": "8.23.0"
   },
   "devDependencies": {
