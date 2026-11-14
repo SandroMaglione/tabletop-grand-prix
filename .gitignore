@@ -1,3 +1,7 @@
 node_modules
 dist
 output
+.alchemy
+# Secrets: the admin secret per stage (docs/server.md)
+.env
+.env.*

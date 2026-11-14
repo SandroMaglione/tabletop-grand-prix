@@ -6,6 +6,9 @@
  * merged with `Controls`, so a press counts once whichever device made it. `read` is
  * called once per simulation tick: a press shorter than a frame still reaches one tick.
  *
+ * Keys typed into a form field (the player's name) are left to it: ritmo's keyboard does
+ * not press an action for them.
+ *
  * Two ways to steer, chosen by the handling variant:
  * - relative to the car (every variant whose name does not start with `screen`): left and
  *   right turn the wheel, up is throttle, down is brake.
@@ -100,9 +103,12 @@ export const createInput = (host: Window): Input => {
   /** The device used last, so the HUD names the right buttons. */
   let padActive = false
 
-  // Space is the brake: it must not scroll the page too.
+  // Space is the brake: it must not scroll the page too. A space typed into a form field
+  // (the player's name) is the field's.
   const stopSpace = (event: KeyboardEvent): void => {
-    if (event.key === " " && !event.ctrlKey && !event.metaKey) event.preventDefault()
+    const target = event.target
+    const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+    if (event.key === " " && !event.ctrlKey && !event.metaKey && !typing) event.preventDefault()
   }
   host.addEventListener("keydown", stopSpace)
 

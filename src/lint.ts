@@ -4,11 +4,10 @@
  */
 import { HostClock } from "@typeonce/ritmo"
 import type * as Lint from "@typeonce/ritmo-devtools/Lint"
-import { Drive, Game, Root, makeDebugRuntime, update } from "./sim/game.ts"
+import { Game, Root, idleIntent, makeDebugRuntime, update } from "./sim/game.ts"
 import { fixtureTrack } from "./sim/track/index.ts"
 
 export const lintTarget = async (): Promise<Lint.Target<typeof Game.schema, typeof Root>> => ({
-  runtime: makeDebugRuntime(fixtureTrack, "car", { hostClock: HostClock.test() }),
-  schedules: { update },
-  hostEvents: [Drive]
+  runtime: makeDebugRuntime(fixtureTrack, "car", { snapshot: () => idleIntent("car") }, { hostClock: HostClock.test() }),
+  schedules: { update }
 })

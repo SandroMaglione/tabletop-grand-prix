@@ -11,8 +11,8 @@
 import { botInput } from "../src/sim/bot.ts"
 import { createSession, fixtureTrack, track as mainTrack } from "../src/sim/index.ts"
 import type { RaceEvent, TrackData } from "../src/sim/index.ts"
-import { isVariant, variantNames } from "../src/sim/tuning.ts"
-import type { VariantName } from "../src/sim/tuning.ts"
+import { STEERINGS as variantNames, isSteering as isVariant } from "../src/sim/schema.ts"
+import type { Steering as VariantName } from "../src/sim/schema.ts"
 
 const args = process.argv.slice(2)
 const trace = args.includes("--trace")

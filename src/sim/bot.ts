@@ -9,7 +9,7 @@
  */
 import { Ops } from "@typeonce/ritmo"
 import { angleDelta, indexAt, locateNear, pointAt } from "./track/query.ts"
-import { variants } from "./tuning.ts"
+import { handling as carHandling } from "./tuning.ts"
 import type { DriveInput, RaceView, TrackData } from "./types.ts"
 
 /** How the bot drives: margins it keeps below what the car can do. */
@@ -44,7 +44,7 @@ const aheadOf = (track: TrackData, s: number, target: number): number => (((targ
  * Cones are not worth steering for.
  */
 const lineOffset = (view: RaceView, track: TrackData, s: number, reach: number): { offset: number; distance: number | null } => {
-  const car = variants.car
+  const car = carHandling
   const hint = indexAt(track, s + 10)
   const ahead: Array<{ distance: number; d: number; radius: number; halfWidth: number }> = []
   const consider = (x: number, z: number, radius: number): void => {
@@ -92,7 +92,7 @@ const lineOffset = (view: RaceView, track: TrackData, s: number, reach: number):
 
 /** The fastest the car should go now so it can still slow for every corner ahead. */
 const targetSpeed = (view: RaceView, track: TrackData, s: number): number => {
-  const gravity = variants.car.gravity
+  const gravity = carHandling.gravity
   // A car that is sliding grips less than planned: back off while it slides.
   const cornerAccel = plan.cornerAccel * (1 - plan.slideCaution * view.car.slip)
   let target = 99
@@ -133,7 +133,7 @@ export const botInput = (view: RaceView, track: TrackData): DriveInput => {
   const travel = speed > 3 ? Ops.atan2(car.vx, car.vz) : car.yaw
   const going = travel + angleDelta(travel, car.yaw) * plan.noseShare
   const error = angleDelta(going, Ops.atan2(dx, dz))
-  const handling = variants.car
+  const handling = carHandling
   const moving = Math.max(Math.abs(speed), 0.5)
   const turnRate = Math.min(moving / handling.minTurnRadius, handling.turnAccel / moving)
   const wantedRate = (2 * Ops.sin(error) * moving) / Math.max(Math.sqrt(dx * dx + dz * dz), 1)

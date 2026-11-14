@@ -33,6 +33,14 @@ A solo time-attack racer made to show PixiJS 3D (`@pixi/3d`) with a game built o
 
 Nothing on the track runs on a timer: every obstacle is where the player left it, so a lap is only as good as the driving. Everything the car knocked about goes back when the attempt restarts.
 
+## Sharing laps
+
+- A lap is kept as its inputs (a replay), not as positions: the simulation gives the same lap from the same inputs on every device, so a replay is the best lap on the device, what is sent to the leaderboard, and what a ghost is driven from.
+- The leaderboard is one board per track and rules version, each player's best run only. The server drives every replay it is sent and files the time it gets, so a time on the board was driven.
+- A player has no account: the device picks a name once and keeps a secret that proves later requests are its own. A name belongs to one device. Names that read the same are the same name, and some are refused (see `docs/server.md`).
+- The ghost beside the car is, by default, the next closest run: the slowest one still faster than the player's best. The player can pick any run on the board, their own best, or none.
+- With no server the game plays the same, with the device's own best as the ghost. A lap that could not be sent is kept and sent later.
+
 ## Scale
 
 - Units are metres. The car is about 2.4 long and 1.3 wide. The road is about 6.5 wide.
@@ -53,7 +61,26 @@ A solid scale model on a pale table, not a flat map.
 
 ## How the code is laid out
 
-- `src/sim`: the simulation, headless, on ritmo. `types.ts` is the contract the page reads; `track/` is the track data and the queries on it; `tuning.ts` holds the handling variants.
+- `src/sim`: the simulation, headless, on ritmo. `game.ts` is its entry: the schedule of one tick and the runtime.
+  - `schema.ts`: every value the world keeps, as an Effect schema, so a race can be saved, restored, replayed and fuzzed. A value that only means something in one situation lives in that situation's state (the car on the road or in the air, the boost off, on a pad or fading, the lap ready, running or finished).
+  - `state.ts`: what the world holds (saved state, unsaved state, what the host gives). `systems/`: one file per system. `view.ts`: what the session reads.
+  - `car.ts` and `obstacles.ts`: the physics, as plain functions. `tuning.ts`: the game's values, each with its unit and range. `track/`: the track data and the queries on it. `types.ts`: the contract the page reads.
+  - The player's input reaches the world through one input source, which is also what replays and the fuzzer feed.
+- `test/`: a test per rule, `invariants.ts` (what must hold after every tick), `fuzz.test.ts` (random driving on the real schedule against the invariants), `save.test.ts` (a race saved mid-lap restores and plays on the same), `replay.test.ts` (a lap driven again gives the same lap; the kept lap pins the rules).
 - `src/host`: the page. `contract.ts` names its parts: `stage.ts` (Pixi app, view, camera), `world/` (terrain, road, scenery, light), `actors/` (car, ghost, crates, pads, gates, particles, skid marks), and `main.ts` with input, HUD, sound and the ghost.
 - The page reads the simulation only through `src/sim/index.ts`.
-- `PROTOTYPE.md` puts the game in prototype mode: see the `ritmo-prototype` skill.
+- `src/sim/replay.ts`: a lap as its inputs, and `runReplay`, which drives one again. `src/sim/version.ts` is the rules version; raise it whenever a change moves a lap.
+- `src/api`: what the game and the leaderboard's server say to each other. `src/server` and `alchemy.run.ts`: the server on Cloudflare.
+- `pnpm check` is the whole check: types, lint, the simulation lint and the tests. `pnpm verify:engines` drives the kept replays in Chromium, Firefox and WebKit and compares them with Node, bit for bit.
+
+## How it got here
+
+The game began as a prototype; these are its rounds, with the player's verdict on each in their words.
+
+| round | what was tried | verdict |
+|---|---|---|
+| 1 | First playable: the Spindle Leap track, three handling variants (`car`, `car-loose`, `screen`), ghost, sectors, medals | "The bottom-right curve may be broken, it puts me off screen while I am still on (I cannot go beyond it)." Asked for gamepad support, acceleration a little slower, and more juice in the car on acceleration, curves, hits and speed up. |
+| 2 | Banked hairpin fixed (a wall touch there launched the car and reset the lap) and its bank lowered; gamepad named on screen, analog triggers, rumble; slower acceleration; body lean, squash and stretch, launch dust, speed streaks, hit flashes. Screen shake on hits tried and removed ("too much"). | "My first impression is that commands are a little hard, and the car is hard to control" |
+| 3 | Forgiving handling: the car turns much harder at speed and a held turn slows it by itself (a driver who never lifts went from 10 hard wall hits a lap to 1 in `scripts/novice.ts`); stronger boost before the jump. Steering named in plain words on screen; point-where-to-go steering fixed on the keyboard (down is a direction, space brakes, arrows follow the track's grid). | "This work better." Asked to show a little more of what PixiJS 3D can do; for the boxes to "stick in the map, not explode"; to drop the timed gate ("the stick that, when down, just blocks you (too much luck into that)") for other obstacles with collisions, with the track reconsidered around them; and reported broken rendering around the spiral and its bridge. |
+| 4 | Nothing on a timer any more. Props the car shoves and that stay where they stop (a crate wall two high with barrels, cones, three heavy balls that roll on), a slalom of fixed posts in slanted fences, swing doors pushed open in place of the gate; the road widened around each. Render faults at the crossings fixed and some living scenery added. | "This works." Asked to clean up the visuals: make the map the focus (as large as the screen fits), a little less text, and a more appealing UI inspired by a racing-management game's dark timing panels. |
+| 5 | Looks only. The camera picks the turn that shows the board largest and the HUD lies over its corners; one dark timing panel (clock, best, sectors with the current one lit, next medal), a speed bar, controls as key caps that hide while racing, messages and the result at the bottom. | "This works." |

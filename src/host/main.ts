@@ -10,24 +10,50 @@
  *
  * Pixi's own ticker is stopped and run from the loop's `render`, so a frame draws the
  * state the simulation just reached, and anything else on Pixi's ticker still runs.
+ *
+ * Every input goes through `quantise` before the session, and to the lap recorder after it
+ * (`laps.ts`), so a finished lap is a replay. What the page keeps (settings, name, best lap,
+ * rival, runs waiting to be sent) is on Effect services over one store (`storage.ts`); the
+ * leaderboard is the `Leaderboard` service, chosen here:
+ * - `?server=fake`: the stand-in in the page (`online/fake.ts`), `?server=down` one that never answers;
+ * - else `VITE_API_URL`, when set: the real server (`src/api/http.ts`);
+ * - else none: the game plays offline, with the device's own best as the ghost.
  */
 import { Clock, FixedLoop, Result } from "@typeonce/ritmo"
 import { BrowserTickSource, BrowserVisibility } from "@typeonce/ritmo-browser"
-import { createSession, track, type RaceEvent, type RaceSession } from "../sim/index.ts"
+import { Effect, Layer, ManagedRuntime } from "effect"
+import type { Leaderboard } from "../api/contract.ts"
+import { layerHttp } from "../api/http.ts"
+import { createSession, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
 import { createActors } from "./actors/index.ts"
 import { createAudio } from "./audio.ts"
+import { Bests, boardsLayer, Rivals } from "./boards.ts"
 import type { Stage } from "./contract.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
 import { createHud, hudFont, hudLabelFont, steeringName } from "./hud.ts"
 import { createInput } from "./input.ts"
+import { createLaps, type Laps } from "./laps.ts"
+import { layerDown } from "./online/down.ts"
+import { createOnline, type Online, type OnlineServices } from "./online.ts"
+import { createPanels } from "./panels.ts"
+import { Profile, layer as profileLayer } from "./profile.ts"
+import { Settings, layer as settingsLayer } from "./settings.ts"
 import { createStage } from "./stage.ts"
-import { loadMuted, loadVariant, saveMuted, saveVariant } from "./storage.ts"
+import { storageLayer, takeLegacySettings } from "./storage.ts"
 import { createTrackScene } from "./world/index.ts"
 
 declare global {
   interface Window {
-    /** For test scripts: the running session and the stage, and the ghost of the best lap. */
-    __race?: { readonly session: RaceSession; readonly stage: Stage; readonly ghost?: Ghost }
+    /** For test scripts: the running session, the stage, the ghost, the laps and the leaderboard. */
+    __race?: {
+      readonly session: RaceSession
+      readonly stage: Stage
+      readonly ghost?: Ghost
+      readonly laps?: Laps
+      readonly online?: Online
+      /** When set, drives the car instead of the keyboard and the gamepad (`scripts/drive.ts`). */
+      drive?: (view: RaceView, track: TrackData) => DriveInput
+    }
   }
 }
 
@@ -45,34 +71,117 @@ const loadFont = async (): Promise<void> => {
   }
 }
 
+// ── the leaderboard and the saves ───────────────────────────────────────
+
+const params = new URLSearchParams(window.location.search)
+const apiUrl: unknown = import.meta.env.VITE_API_URL
+const server = params.get("server")
+const leaderboard: Layer.Layer<Leaderboard> | null =
+  server === "fake"
+    ? (await import("./online/fake.ts")).layerFake({ fresh: params.has("fresh") })
+    : server === "down"
+      ? layerDown
+      : typeof apiUrl === "string" && apiUrl !== ""
+        ? layerHttp(apiUrl)
+        : null
+
+type AppServices = OnlineServices | Settings
+const app = ManagedRuntime.make(Layer.mergeAll(settingsLayer, profileLayer, boardsLayer, leaderboard ?? layerDown).pipe(Layer.provide(storageLayer)))
+
+/** Runs an effect of the page's services off the game loop; a defect is logged, never thrown. */
+const run = <A>(effect: Effect.Effect<A, never, AppServices>): Promise<A | undefined> =>
+  app.runPromise(effect).catch((error: unknown) => {
+    console.warn("a save or a request failed", error)
+    return undefined
+  })
+
+const isSteering = (name: string | null): name is Steering => name === "car" || name === "screen"
+
+const loaded = await run(
+  Effect.gen(function*() {
+    const settings = yield* Settings
+    // The build before this one kept two settings in localStorage: carried over once, then dropped.
+    const legacy = takeLegacySettings()
+    let saved = yield* settings.saved
+    if (settings.fresh && (legacy.steering !== null || legacy.muted !== null)) {
+      saved = yield* settings.change({
+        steering: legacy.steering === "screen" ? "screen" : "car",
+        muted: legacy.muted ?? false
+      })
+    }
+    const profile = yield* (yield* Profile).saved
+    const entry = trackById(params.get("track") ?? saved.track) ?? tracks[0] ?? { id: "spindle-leap", name: firstTrack.name, data: firstTrack }
+    const best = yield* Bests.use((bests) => bests.get(entry.id, rulesVersion))
+    const rival = yield* Rivals.use((rivals) => rivals.get(entry.id, rulesVersion))
+    return { settings: saved, profile, entry, best, rival }
+  })
+)
+const entry = loaded?.entry ?? tracks[0] ?? { id: "spindle-leap", name: firstTrack.name, data: firstTrack }
+const track = entry.data
+
+const switchTrack = (id: string): void => {
+  void run(Settings.use((settings) => settings.change({ track: id }))).then(() => {
+    const url = new URL(window.location.href)
+    url.searchParams.delete("track")
+    window.location.href = url.toString()
+  })
+}
+
+// ── the race ────────────────────────────────────────────────────────────
+
 const [stage] = await Promise.all([createStage(track, document.body), loadFont()])
 const scene = createTrackScene(stage, track)
 const actors = createActors(stage, track)
-const session = createSession(track)
-window.__race = { session, stage }
+const session = createSession(track, loaded?.settings.steering ?? "car")
+const steering = (): Steering => {
+  const name = session.variant()
+  return isSteering(name) ? name : "car"
+}
 
-const stored = loadVariant()
-if (stored !== null && session.variants.includes(stored)) session.setVariant(stored)
+const laps = createLaps(entry.id, loaded?.best ?? null, steering)
+const ghost = createGhost()
+const online = createOnline({
+  enabled: leaderboard !== null,
+  run,
+  track: entry.id,
+  rules: rulesVersion,
+  laps,
+  ghost,
+  identity: loaded?.profile.identity ?? null,
+  asked: loaded?.profile.asked ?? false,
+  rival: loaded?.rival ?? { version: 1, choice: { kind: "next" }, run: null },
+  tracks: tracks.map((one) => one.id)
+})
+window.__race = { session, stage, ghost, laps, online }
 
-const ghost = createGhost(track, session.hz)
-window.__race = { session, stage, ghost }
-const hud = createHud(stage, track, ghost)
-const audio = createAudio(loadMuted())
+const hud = createHud(stage, track, {
+  best: () => laps.best(),
+  ghost: () => ghost.current(),
+  ghostLoading: () => online.state().ghostLoading,
+  lastFinish: () => laps.lastFinish(),
+  rank: () => online.state().rank,
+  post: () => online.state().post,
+  online: () => online.state().enabled
+})
+const panels = createPanels({ online, tracks, track: entry.id, switchTrack })
+const audio = createAudio(loaded?.settings.muted ?? false)
 const input = createInput(window)
+online.start()
 
 // Audio may only start after the player does something.
 const unlockAudio = (): void => audio.unlock()
 window.addEventListener("keydown", unlockAudio)
 window.addEventListener("pointerdown", unlockAudio)
 
-/** The gap to the best lap's split at a checkpoint event, or null with no best lap. */
+/** The gap to the raced ghost's split (or the best lap's) at a checkpoint event, or null with neither. */
 const checkpointGap = (event: RaceEvent): number | null => {
   if (event.kind !== "checkpoint") return null
   // The split this checkpoint made; if the view has moved on, line `index` ends split `index - 1`
   // (line 0 is the start line).
   const found = session.view().lap.splitsMs.indexOf(event.timeMs)
-  const best = ghost.best()?.splitsMs[found >= 0 ? found : event.index - 1]
-  return best === undefined ? null : event.timeMs - best
+  const splits = ghost.current()?.splitsMs ?? laps.best()?.splitsMs
+  const reference = splits?.[found >= 0 ? found : event.index - 1]
+  return reference === undefined ? null : event.timeMs - reference
 }
 
 /** Events from the ticks since the last frame, for the frame's actors, HUD and sound. */
@@ -95,10 +204,13 @@ const rumbleFor = (event: RaceEvent): void => {
 const step = (): void => {
   const variant = session.variant()
   const read = input.read(variant.startsWith("screen"), stage.groundDirection)
+  // A replay holds one steering: changing it while an attempt is under way starts it again.
+  let restart = false
   if (read.cycleVariant && session.variants.length > 1) {
     const next = session.variants[(session.variants.indexOf(variant) + 1) % session.variants.length] ?? variant
+    restart = laps.recording()
     session.setVariant(next)
-    saveVariant(next)
+    if (isSteering(next)) void run(Settings.use((settings) => settings.change({ steering: next })))
     hud.toast(`steering: ${steeringName(next)}`)
   }
   const label = read.pad.kind === "none" ? "none" : read.pad.kind === "buttons-only" ? "buttons-only" : read.pad.active ? "gamepad" : "keyboard"
@@ -111,12 +223,17 @@ const step = (): void => {
   }
   if (read.toggleMute) {
     audio.setMuted(!audio.muted())
-    saveMuted(audio.muted())
-    hud.toast(audio.muted() ? "sound off" : "sound on")
+    const muted = audio.muted()
+    void run(Settings.use((settings) => settings.change({ muted })))
+    hud.toast(muted ? "sound off" : "sound on")
   }
-  session.tick(read.drive)
+  const asked = window.__race?.drive?.(session.view(), track) ?? read.drive
+  // The simulation is given what a replay can hold, so the replay drives the same lap.
+  const drive = quantise(restart ? { ...asked, restart: true } : asked)
+  session.tick(drive)
   const events = session.drainEvents()
-  ghost.afterTick(session.view(), events)
+  const finish = laps.afterTick(drive, session.view(), events)
+  if (finish !== null) online.finished(finish)
   for (const event of events) pending.push(event)
 }
 
@@ -147,6 +264,7 @@ const loop = FixedLoop.start({
     const events = pending
     pending = []
     for (const event of events) {
+      if (event.kind === "start") panels.lapStarted()
       actors.handle(event, view)
       hud.handle(event, view)
       audio.handle(event, view, checkpointGap(event))
@@ -155,6 +273,7 @@ const loop = FixedLoop.start({
     scene.update(view, seconds)
     actors.update(view, ghost.pose(view), seconds)
     hud.update(view, { variant: session.variant(), muted: audio.muted(), pad: padLabel }, seconds)
+    panels.update(view.lap.phase === "running")
     audio.update(view)
     stage.app.ticker.update(nowMs)
   },

@@ -1,9 +1,13 @@
 /**
- * Every number that shapes how the car feels, and the named handling variants the game
- * switches between (`RaceSession.setVariant`).
+ * Every number that shapes how the car feels and what it hits: the game's values.
  *
- * A variant is a whole `Handling`: the shared `base` with a few numbers or rules changed.
- * Add a variant by adding its name to `variantNames` and an entry to `variants`.
+ * There is one set. The two ways to steer (by the wheel, or by pointing where to go) drive
+ * the same car on the same numbers, so a lap steered either way is ranked on one board.
+ * The world holds `handling` and `contact` as resources (`state.ts`), each number with its
+ * unit and the range it is expected to stay in (`handlingMeta`, `contactMeta`), which the
+ * devtools show and warn about.
+ *
+ * Changing any number here changes every lap: raise `rulesVersion` (`version.ts`).
  */
 import { Clock } from "@typeonce/ritmo"
 import type { PropKind } from "./types.ts"
@@ -28,7 +32,7 @@ export const propPhysics: Record<PropKind, { readonly mass: number; readonly fri
 }
 
 /** The numbers shared by every collision with props, posts and doors. */
-export const contact = {
+export const contact: Contact = {
   /** Gravity on a prop that falls off a stack, m/s^2. */
   gravity: 24,
   /** Share of the speed of the prop under it that a prop keeps when it loses its footing. */
@@ -56,10 +60,26 @@ export const contact = {
   doorBounce: 0.1
 }
 
-export interface Handling {
-  /** `car`: `DriveInput.steer` turns the wheel. `screen`: the car turns toward `DriveInput.aim`. */
-  readonly steering: "car" | "screen"
+export interface Contact {
+  readonly gravity: number
+  readonly carry: number
+  readonly spinDrag: number
+  readonly spinShare: number
+  readonly spinMax: number
+  readonly separate: number
+  readonly restSpeed: number
+  readonly eventFrom: number
+  readonly knockFrom: number
+  readonly postBounce: number
+  readonly postLoss: number
+  readonly postAlign: number
+  readonly doorMass: number
+  readonly doorDrag: number
+  readonly doorRest: number
+  readonly doorBounce: number
+}
 
+export interface Handling {
   // Engine and brakes, along the car's heading.
   /** Push of the engine from standstill at full throttle, m/s^2. It fades to zero at the speed limit. */
   readonly engineAccel: number
@@ -151,9 +171,8 @@ export interface Handling {
   readonly boostTopSpeed: number
 }
 
-/** The shared handling: steering relative to the car, firm grip. */
-const base: Handling = {
-  steering: "car",
+/** The car. */
+export const handling: Handling = {
   engineAccel: 15,
   topSpeed: 30,
   rolling: 1.5,
@@ -196,17 +215,68 @@ const base: Handling = {
   boostTopSpeed: 36
 }
 
-/** The handling variants, in the order the game cycles them. */
-export const variantNames = ["car", "car-loose", "screen"] as const
-export type VariantName = (typeof variantNames)[number]
+type Meta<Value> = { readonly [K in keyof Value]: { readonly unit: string; readonly range: readonly [number, number]; readonly hint?: string } }
 
-export const variants = {
-  /** Steering relative to the car, from `DriveInput.steer`. */
-  car: base,
-  /** The same with half the grip: the car slides wide and slides cost more. */
-  "car-loose": { ...base, grip: 3.2, scrub: 0.45, turnAccel: 36 },
-  /** The player points where to go (`DriveInput.aim`); the car turns toward it. */
-  screen: { ...base, steering: "screen" }
-} as const satisfies Record<VariantName, Handling>
+/** The unit of each handling number and the range it is tuned within. */
+export const handlingMeta = {
+  engineAccel: { unit: "m/s^2", range: [5, 40] },
+  topSpeed: { unit: "m/s", range: [15, 45] },
+  rolling: { unit: "m/s^2", range: [0, 6] },
+  drag: { unit: "1/m", range: [0, 0.02] },
+  brakeDecel: { unit: "m/s^2", range: [10, 60] },
+  reverseSpeed: { unit: "m/s", range: [2, 15] },
+  reverseAccel: { unit: "m/s^2", range: [2, 20] },
+  overspeedPull: { unit: "1/s", range: [0.2, 6] },
+  steerResponse: { unit: "1/s", range: [4, 40] },
+  minTurnRadius: { unit: "m", range: [3, 12], hint: "Must stay under the tightest corner's inside radius." },
+  turnAccel: { unit: "m/s^2", range: [15, 70] },
+  turnDrag: { unit: "share of turnAccel", range: [0, 0.8] },
+  turnDragBuild: { unit: "1/s", range: [1, 20] },
+  grip: { unit: "1/s", range: [2, 20] },
+  scrub: { unit: "share", range: [0, 1] },
+  slipFrom: { unit: "m/s", range: [0.2, 5] },
+  slipRange: { unit: "m/s", range: [1, 10] },
+  aimGain: { unit: "lock/rad", range: [1, 12] },
+  slopeGain: { unit: "share of gravity", range: [0, 1] },
+  bankGrip: { unit: "share of gravity", range: [0, 3] },
+  bankSlide: { unit: "share of gravity", range: [0, 2] },
+  bankSlideSpeed: { unit: "m/s", range: [1, 20] },
+  crestTolerance: { unit: "m", range: [0.01, 0.3] },
+  gravity: { unit: "m/s^2", range: [9, 40], hint: "The jump's gap is laid out for this." },
+  airSteer: { unit: "rad/s", range: [0, 4] },
+  landReach: { unit: "m", range: [0.1, 1] },
+  landAhead: { unit: "m", range: [30, 150] },
+  hardLanding: { unit: "m/s", range: [2, 15] },
+  landingLoss: { unit: "share per m/s", range: [0, 0.1] },
+  landingLossMax: { unit: "share", range: [0, 0.8] },
+  radius: { unit: "m", range: [0.5, 1.2], hint: "Half the narrowest gap the car fits through." },
+  height: { unit: "m", range: [0.6, 1.8] },
+  wallLoss: { unit: "share", range: [0, 1] },
+  wallRub: { unit: "1/s", range: [0, 4] },
+  wallAlign: { unit: "share of angle", range: [0, 1] },
+  wallEventFrom: { unit: "m/s", range: [0.2, 3] },
+  wallEventImpact: { unit: "m/s", range: [1, 10] },
+  wallLetGo: { unit: "m", range: [0.05, 0.6] },
+  boostAccel: { unit: "m/s^2", range: [10, 60] },
+  boostTopSpeed: { unit: "m/s", range: [30, 50] }
+} as const satisfies Meta<Handling>
 
-export const isVariant = (name: string): name is VariantName => variantNames.some((known) => known === name)
+/** The unit of each contact number and the range it is tuned within. */
+export const contactMeta = {
+  gravity: { unit: "m/s^2", range: [9, 40] },
+  carry: { unit: "share", range: [0, 1] },
+  spinDrag: { unit: "1/s", range: [0.5, 10] },
+  spinShare: { unit: "share", range: [0, 1] },
+  spinMax: { unit: "rad/s", range: [2, 20] },
+  separate: { unit: "m/tick", range: [0.005, 0.1] },
+  restSpeed: { unit: "m/s", range: [0.01, 0.5] },
+  eventFrom: { unit: "m/s", range: [0.2, 3] },
+  knockFrom: { unit: "m/s", range: [1, 10] },
+  postBounce: { unit: "share", range: [0, 0.6] },
+  postLoss: { unit: "share", range: [0, 1] },
+  postAlign: { unit: "share of angle", range: [0, 1] },
+  doorMass: { unit: "car masses", range: [0.05, 2] },
+  doorDrag: { unit: "1/s", range: [0.2, 6] },
+  doorRest: { unit: "rad/s", range: [0.005, 0.2] },
+  doorBounce: { unit: "share", range: [0, 0.6] }
+} as const satisfies Meta<Contact>

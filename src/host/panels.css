@@ -1,0 +1,209 @@
+/*
+ * The leaderboard's panels: DOM over the top right corner of the board, drawn like the HUD's
+ * Pixi panels (`hud.ts`). The colours come from `palette.ts` as variables set by `panels.ts`.
+ */
+.tgp-panels {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 272px;
+  transform-origin: top right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  color: var(--hud-text);
+  font-family: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  letter-spacing: 1px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.tgp-panels > * { pointer-events: auto; }
+.tgp-panels[hidden], .tgp-panels [hidden] { display: none !important; }
+
+.tgp-panel {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--hud-back-a);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.tgp-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 6px 0 19px;
+  background: var(--hud-head-a);
+  font-size: 12px;
+}
+.tgp-head::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  background: var(--hud-accent);
+}
+.tgp-head .tgp-title { flex: 1; }
+.tgp-head .tgp-count { color: var(--hud-dim); font-size: 11px; margin-right: 4px; }
+
+.tgp-x {
+  width: 20px;
+  height: 18px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--hud-dim);
+  font: 500 13px "JetBrains Mono", ui-monospace, monospace;
+  cursor: pointer;
+  padding: 0;
+}
+.tgp-x:hover { color: var(--hud-text); background: rgba(255, 255, 255, 0.1); }
+
+.tgp-mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 500; letter-spacing: 0; }
+.tgp-dim { color: var(--hud-dim); }
+.tgp-good { color: var(--hud-good); }
+.tgp-bad { color: var(--hud-bad); }
+.tgp-accent { color: var(--hud-accent); }
+
+/* The board's rows. */
+.tgp-rows { padding: 2px 0 4px; }
+.tgp-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px 1fr auto 14px;
+  align-items: center;
+  column-gap: 8px;
+  height: 22px;
+  padding: 0 6px 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tgp-row:first-child { border-top: 0; }
+.tgp-row:hover { background: rgba(255, 255, 255, 0.07); }
+.tgp-row .tgp-rank { text-align: right; font-size: 11px; color: var(--hud-dim); }
+.tgp-row .tgp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--hud-dim); }
+.tgp-row .tgp-time { font-size: 12px; }
+.tgp-row.tgp-mine .tgp-name { color: var(--hud-text); }
+.tgp-row.tgp-mine::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--hud-accent);
+}
+.tgp-row .tgp-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+.tgp-row.tgp-raced .tgp-dot { background: var(--ghost); }
+.tgp-row.tgp-raced .tgp-name { color: var(--hud-text); }
+.tgp-gap { height: 10px; display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 10px; letter-spacing: 3px; }
+.tgp-empty { padding: 10px; font-size: 12px; color: var(--hud-dim); text-align: center; }
+
+/* A line of the panel: label and controls. */
+.tgp-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px 0 10px;
+  font-size: 11px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+.tgp-line .tgp-label { color: var(--hud-dim); margin-right: 2px; }
+.tgp-line .tgp-fill { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Chips: the ghost to race, the tracks. The chosen one is lit like the sector being driven. */
+.tgp-chip, .tgp-button {
+  height: 19px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--hud-text);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tgp-chip:hover, .tgp-button:hover { background: rgba(255, 255, 255, 0.2); }
+.tgp-chip[aria-pressed="true"] { background: var(--hud-text); color: var(--hud-back); border-color: var(--hud-text); }
+.tgp-button.tgp-primary { background: var(--hud-accent); color: var(--hud-back); border-color: var(--hud-accent); }
+.tgp-button.tgp-primary:hover { filter: brightness(1.08); }
+.tgp-button:disabled { opacity: 0.4; cursor: default; filter: none; }
+.tgp-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--hud-accent);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.tgp-link:hover { text-decoration: underline; }
+
+/* The closed board: one small panel with a key cap. */
+.tgp-opener {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: var(--hud-back-a);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: var(--hud-dim);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.tgp-opener:hover { color: var(--hud-text); }
+.tgp-cap {
+  min-width: 20px;
+  height: 17px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--hud-text);
+  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0;
+}
+.tgp-opener .tgp-mono { color: var(--hud-text); font-size: 12px; }
+.tgp-faded { opacity: 0; pointer-events: none; }
+
+/* The name. */
+.tgp-form { padding: 10px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
+.tgp-form .tgp-hint { font-size: 11px; color: var(--hud-dim); }
+.tgp-input {
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--hud-text);
+  font: 500 14px "JetBrains Mono", ui-monospace, monospace;
+  outline: none;
+  user-select: text;
+}
+.tgp-input:focus { border-color: var(--hud-accent); }
+.tgp-status { min-height: 14px; font-size: 11px; color: var(--hud-dim); }
+.tgp-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.tgp-actions .tgp-button { height: 22px; padding: 0 10px; }

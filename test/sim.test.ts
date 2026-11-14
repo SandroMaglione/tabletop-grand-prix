@@ -6,7 +6,8 @@ import { test } from "node:test"
 import { botInput } from "../src/sim/bot.ts"
 import { createSession, fixtureTrack, idleInput, indexAt, locateNear, track } from "../src/sim/index.ts"
 import type { DriveInput, RaceEvent, RaceSession, RaceView } from "../src/sim/index.ts"
-import { variantNames, variants } from "../src/sim/tuning.ts"
+import { STEERINGS as variantNames } from "../src/sim/schema.ts"
+import { handling } from "../src/sim/tuning.ts"
 
 /** Ticks the session with `drive` until `stop` says so or `seconds` pass; returns every event. */
 const run = (session: RaceSession, seconds: number, drive: (view: RaceView, tick: number) => DriveInput, stop?: (events: ReadonlyArray<RaceEvent>, view: RaceView) => boolean): Array<RaceEvent> => {
@@ -64,7 +65,7 @@ test("full throttle and full steer for ten seconds never leaves the road", () =>
       let worst = 0
       const events = run(session, 10, () => ({ ...idleInput, throttle: 1, steer }), (_, view) => {
         const hit = locateNear(fixtureTrack, view.car.x, view.car.z, indexAt(fixtureTrack, view.car.s))
-        worst = Math.max(worst, Math.abs(hit.d) - (hit.halfWidth - variants[variant].radius))
+        worst = Math.max(worst, Math.abs(hit.d) - (hit.halfWidth - handling.radius))
         return false
       })
       assert.equal(events.filter((event) => event.kind === "reset").length, 0, `${variant} steer ${steer}: reset`)
@@ -82,7 +83,7 @@ test("the same inputs give the same views twice", () => {
   }
   const record = (): Array<RaceView | ReadonlyArray<RaceEvent>> => {
     const session = createSession(fixtureTrack)
-    session.setVariant("car-loose")
+    session.setVariant("screen")
     const seen: Array<RaceView | ReadonlyArray<RaceEvent>> = []
     for (let tick = 0; tick < 2400; tick++) {
       session.tick(drive(session.view(), tick))

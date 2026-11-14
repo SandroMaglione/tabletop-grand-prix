@@ -3,12 +3,16 @@
  * map is the picture; the HUD stays out of its way.
  *
  * - top left: the timing panel. The track's name and the medals earned, the lap clock, the
- *   best lap, one row per sector (the one being driven is lit; a finished one shows its gap
- *   to the best lap's split), and the next medal's time.
+ *   best lap (with the player's place on the board), the ghost being raced, one row per
+ *   sector (the one being driven is lit; a finished one shows its gap to the ghost's split),
+ *   and the next medal's time.
  * - bottom right: the speed, with a bar.
  * - bottom left: the controls as key caps, only while the car is not racing.
  * - bottom centre: short messages ("press up to start", "off the road", a changed setting)
- *   and the result when a lap is done.
+ *   and the result when a lap is done, with the board's answer when it was sent.
+ *
+ * The leaderboard's own panels (the board, the name) are DOM over the top right corner:
+ * `panels.ts`.
  *
  * Laid out in CSS pixels from `app.screen` on every resize, and scaled down a little on
  * small windows. Text is drawn at the renderer's resolution.
@@ -16,8 +20,26 @@
 import { Container, Graphics, Text, type TextStyleOptions } from "pixi.js"
 import type { RaceEvent, RaceView, TrackData } from "../sim/index.ts"
 import type { Stage } from "./contract.ts"
-import type { Ghost } from "./ghost.ts"
+import type { LapGhost } from "./ghost.ts"
+import type { FinishResult } from "./laps.ts"
+import type { PostState } from "./online.ts"
 import { palette } from "./palette.ts"
+
+/** What the HUD shows about laps, ghosts and the board. */
+export interface HudSource {
+  /** The device's best lap. */
+  best(): { readonly timeMs: number; readonly splitsMs: ReadonlyArray<number> } | null
+  /** The ghost being raced. */
+  ghost(): LapGhost | null
+  ghostLoading(): boolean
+  lastFinish(): FinishResult | null
+  /** The player's place on the board, when known. */
+  rank(): { readonly rank: number; readonly total: number } | null
+  /** What became of the last best lap sent, and the attempt it was driven in. */
+  post(): { readonly attempt: number; readonly state: PostState } | null
+  /** A leaderboard is configured. */
+  online(): boolean
+}
 
 export interface HudState {
   readonly variant: string
@@ -51,11 +73,26 @@ export const formatTime = (ms: number): string => {
 export const formatGap = (ms: number): string => `${ms <= 0 ? "−" : "+"}${(Math.abs(ms) / 1000).toFixed(3)}`
 
 /** A handling variant in the player's words. */
-export const steeringName = (variant: string): string =>
-  variant === "car" ? "like a car" : variant === "car-loose" ? "like a car, loose grip" : variant === "screen" ? "point where to go" : variant
+export const steeringName = (variant: string): string => (variant === "car" ? "like a car" : variant === "screen" ? "point where to go" : variant)
 
-/** The same in a word or two, for the key caps. */
-const steeringShort = (variant: string): string => (variant === "car" ? "car" : variant === "car-loose" ? "car, loose" : variant === "screen" ? "point" : variant)
+/** The same in a word, for the key caps. */
+const steeringShort = (variant: string): string => (variant === "car" ? "car" : variant === "screen" ? "point" : variant)
+
+/** The board's answer to a lap, in a few words; null when there is nothing to say. */
+export const postLine = (state: PostState): { readonly text: string; readonly tone: "accent" | "dim" | "bad" } => {
+  switch (state.kind) {
+    case "sending":
+      return { text: "SENDING TO THE BOARD…", tone: "dim" }
+    case "sent":
+      return { text: `#${state.rank} OF ${state.total}`, tone: "accent" }
+    case "waiting":
+      return { text: "SAVED · SENDS WHEN ONLINE", tone: "dim" }
+    case "unlisted":
+      return { text: "NOT ON THE BOARD · L TO PICK A NAME", tone: "dim" }
+    case "refused":
+      return { text: "THE BOARD COULD NOT FILE THIS LAP", tone: "bad" }
+  }
+}
 
 const margin = 12
 const radius = 5
@@ -82,7 +119,7 @@ const medalColour = { bronze: palette.bronze, silver: palette.silver, gold: pale
 /** A key cap and what the key does. */
 type Hint = readonly [cap: string, does: string]
 
-export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => {
+export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hud => {
   const root = new Container()
   stage.app.stage.addChild(root)
   const sectorCount = Math.max(1, track.checkpoints.length)
@@ -93,7 +130,7 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
   const headH = 24
   const clockH = 42
   const rowH = 23
-  const towerH = headH + clockH + rowH * (sectorCount + 2)
+  const towerH = headH + clockH + rowH * (sectorCount + 3)
   const tower = new Container()
   const towerBg = new Graphics()
   tower.addChild(towerBg)
@@ -131,10 +168,19 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
     return { band, name: nameText, value, key: "" }
   }
   const bestRow = makeRow(0, "BEST")
-  const sectorRows = Array.from({ length: sectorCount }, (_, i) => makeRow(1 + i, `S${i + 1}`))
-  const targetRow = makeRow(1 + sectorCount, "")
+  const rankText = text(tower, "", number(11, palette.hudDim, "400"))
+  rankText.anchor.set(1, 0.5)
+  rankText.position.set(towerW - pad - 70, headH + clockH + rowH / 2)
+  // The ghost being raced: its driver and time, with a dot in the ghost's colour.
+  const ghostRow = makeRow(1, "")
+  const ghostDot = new Graphics()
+  ghostDot.position.set(pad + 5, headH + clockH + rowH + rowH / 2)
+  tower.addChild(ghostDot)
+  ghostRow.name.position.x = pad + 15
+  const sectorRows = Array.from({ length: sectorCount }, (_, i) => makeRow(2 + i, `S${i + 1}`))
+  const targetRow = makeRow(2 + sectorCount, "")
   const targetDot = new Graphics()
-  targetDot.position.set(pad + 5, headH + clockH + (1 + sectorCount) * rowH + rowH / 2)
+  targetDot.position.set(pad + 5, headH + clockH + (2 + sectorCount) * rowH + rowH / 2)
   tower.addChild(targetDot)
   targetRow.name.position.x = pad + 15
   root.addChild(tower)
@@ -201,8 +247,9 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
   let messageKey = ""
 
   // ── bottom centre: the result ──────────────────────────────────────────
-  const resultW = 250
+  const resultW = 270
   const resultH = 62
+  const resultBoardH = 20
   const result = new Container()
   const resultBg = new Graphics()
   result.addChild(resultBg)
@@ -217,12 +264,16 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
   const resultMedal = text(result, "", label(12, palette.hudText))
   resultMedal.anchor.set(0.5, 0.5)
   resultMedal.position.set(0, 43)
+  const resultBoard = text(result, "", label(12, palette.hudAccent))
+  resultBoard.anchor.set(0.5, 0.5)
+  resultBoard.position.set(0, resultH + 4)
+  let resultBoardKey = ""
   result.visible = false
   root.addChild(result)
   let resultAttempt = -1
 
   // ── state the panels read ─────────────────────────────────────────────
-  /** The best lap's splits at the start of this attempt: the rows compare against these, even after this lap beats it. */
+  /** The ghost's splits (or the best lap's, with no ghost) at the start of this attempt: the rows compare against these, even after this lap beats it. */
   let reference: ReadonlyArray<number> | null = null
   let attempt = -1
   /** Seconds since the page began, for timed messages. */
@@ -234,7 +285,7 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
   let finishShownUntil = -1
 
   const captureReference = (): void => {
-    reference = ghost.best()?.splitsMs ?? null
+    reference = source.ghost()?.splitsMs ?? source.best()?.splitsMs ?? null
   }
 
   const layout = (): void => {
@@ -245,7 +296,7 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
     speedPanel.position.set(width - margin - speedW * scale, height - margin - speedH * scale)
     hintsPanel.position.set(margin, height - margin - hintsH * scale)
     message.position.set(width / 2, height - margin - messageH * scale)
-    result.position.set(width / 2, height - margin - resultH * scale)
+    result.position.set(width / 2, height - margin - (resultH + (resultBoardKey === "" ? 0 : resultBoardH)) * scale)
   }
   layout()
   stage.app.renderer.on("resize", layout)
@@ -269,7 +320,7 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
   }
 
   const drawMedals = (): void => {
-    const best = ghost.best()?.timeMs ?? null
+    const best = source.best()?.timeMs ?? null
     for (const medal of medals) {
       const earned = best !== null && best <= track.medals[medal.name]
       if (earned === medal.earned) continue
@@ -300,8 +351,26 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
     messageBg.position.set(-w / 2, 0)
   }
 
+  /** The board's answer under the result, when there is one for this lap. */
+  const drawResultBoard = (attempt: number): void => {
+    const post = source.post()
+    const line = post !== null && post.attempt === attempt ? postLine(post.state) : null
+    const key = line === null ? "" : `${line.tone}:${line.text}`
+    if (key === resultBoardKey) return
+    resultBoardKey = key
+    resultBg.clear()
+    const h = resultH + (line === null ? 0 : resultBoardH)
+    drawPanel(resultBg, resultW, h)
+    resultBg.rect(0, 8, 3, h - 16).fill({ color: palette.hudAccent })
+    if (line !== null) resultBg.rect(14, resultH - 6, resultW - 28, 1).fill({ color: palette.hudText, alpha: 0.09 })
+    resultBoard.text = line?.text ?? ""
+    resultBoard.style.fill = line === null ? palette.hudDim : line.tone === "accent" ? palette.hudAccent : line.tone === "bad" ? palette.hudBad : palette.hudDim
+    resultBoard.position.y = resultH + 4
+    layout()
+  }
+
   const showResult = (view: RaceView): void => {
-    const finish = ghost.lastFinish()
+    const finish = source.lastFinish()
     if (finish === null) return
     resultAttempt = view.lap.attempt
     if (finish.previous === null) {
@@ -361,12 +430,28 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
       // The clock holds the final time once finished.
       clockText.text = formatTime(lap.phase === "ready" ? 0 : lap.timeMs)
 
-      const best = ghost.best()
-      const bestKey = best === null ? "none" : String(best.timeMs)
+      const best = source.best()
+      const rank = source.rank()
+      const bestKey = `${best === null ? "none" : String(best.timeMs)}:${rank === null ? "" : rank.rank}`
       if (bestKey !== bestRow.key) {
         bestRow.key = bestKey
         bestRow.value.text = best === null ? "–" : formatTime(best.timeMs)
         bestRow.value.style.fill = best === null ? palette.hudDim : palette.hudText
+        rankText.text = best !== null && rank !== null ? `#${rank.rank}` : ""
+      }
+      const lapGhost = source.ghost()
+      const loading = source.ghostLoading()
+      const ghostKey = `${lapGhost?.kind ?? "none"}:${lapGhost?.name ?? ""}:${lapGhost?.timeMs ?? ""}:${loading}`
+      if (ghostKey !== ghostRow.key) {
+        ghostRow.key = ghostKey
+        ghostDot.clear()
+        if (lapGhost !== null) ghostDot.circle(0, 0, 4.5).fill(palette.ghost)
+        else ghostDot.circle(0, 0, 4).stroke({ color: palette.ghost, alpha: 0.7, width: 1.2 })
+        const name = lapGhost === null ? "NO GHOST" : lapGhost.kind === "own" ? "GHOST: YOUR BEST" : lapGhost.name.toUpperCase()
+        ghostRow.name.text = name.length > 17 ? `${name.slice(0, 16)}…` : name
+        ghostRow.name.style.fill = lapGhost?.kind === "rival" ? palette.hudText : palette.hudDim
+        ghostRow.value.text = loading ? "…" : lapGhost?.kind === "rival" ? formatTime(lapGhost.timeMs) : ""
+        ghostRow.value.style.fill = palette.hudText
       }
       for (let i = 0; i < sectorCount; i++) {
         let split = lap.splitsMs[i] ?? null
@@ -389,7 +474,8 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
             : screen
               ? [["↑ ↓ ← →", "point"], ["SPACE", "brake"], ["R", "restart"], steering]
               : [["↑", "gas"], ["← →", "steer"], ["SPACE", "brake"], ["R", "restart"], steering]
-      const withSound: ReadonlyArray<Hint> = state.muted ? [...hints, [state.pad === "gamepad" ? "L3" : "M", "sound off"]] : hints
+      const withBoard: ReadonlyArray<Hint> = source.online() && state.pad !== "gamepad" ? [...hints, ["L", "board"]] : hints
+      const withSound: ReadonlyArray<Hint> = state.muted ? [...withBoard, [state.pad === "gamepad" ? "L3" : "M", "sound off"]] : withBoard
       const nextHints = withSound.map((hint) => hint.join(":")).join("|")
       if (nextHints !== hintsKey) {
         hintsKey = nextHints
@@ -415,6 +501,7 @@ export const createHud = (stage: Stage, track: TrackData, ghost: Ghost): Hud => 
       // The result stays while the lap is finished, or a few seconds when the clock runs on.
       const showingResult = resultAttempt === lap.attempt && (lap.phase === "finished" || now < finishShownUntil)
       result.visible = showingResult
+      if (showingResult) drawResultBoard(lap.attempt)
       const onPad = state.pad === "gamepad"
       if (showingResult) setMessage("")
       else if (now < toastUntil) setMessage(toastText)

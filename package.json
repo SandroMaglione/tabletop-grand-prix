@@ -5,22 +5,36 @@
   "packageManager": "pnpm@10.17.1",
   "scripts": {
     "dev": "vite --host --port 5380",
+    "dev:server": "alchemy dev --profile ${ALCHEMY_PROFILE:-admin}",
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --pretty false",
-    "lint": "oxlint src test scripts",
+    "lint": "oxlint src test scripts alchemy.run.ts",
     "lint:sim": "ritmo-devtools lint src/lint.ts",
     "test": "node --test \"test/*.test.ts\"",
     "bot": "node scripts/bot.ts",
     "shot": "node scripts/shot.ts",
-    "check": "pnpm typecheck"
+    "check": "pnpm typecheck && pnpm lint && pnpm lint:sim && pnpm test",
+    "verify:engines": "node scripts/verify-engines.ts",
+    "deploy:staging": "alchemy deploy --stage staging --profile ${ALCHEMY_PROFILE:-admin} --env-file .env.staging",
+    "deploy:prod": "alchemy deploy --stage prod --profile ${ALCHEMY_PROFILE:-admin} --env-file .env.prod",
+    "destroy:staging": "alchemy destroy --stage staging --profile ${ALCHEMY_PROFILE:-admin} --env-file .env.staging",
+    "destroy:dev": "alchemy destroy --stage dev_${USER} --profile ${ALCHEMY_PROFILE:-admin}",
+    "admin": "node scripts/admin.ts",
+    "e2e": "node scripts/e2e.ts"
   },
   "dependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.87",
+    "@effect/platform-browser": "4.1.4",
     "@pixi/3d": "0.1.0",
     "@typeonce/ritmo": "0.23.0",
     "@typeonce/ritmo-browser": "0.23.0",
+    "alchemy": "2.0.0-beta.87",
+    "effect": "4.1.4",
     "pixi.js": "8.23.0"
   },
   "devDependencies": {
+    "@effect/platform-bun": "4.1.4",
+    "@effect/platform-node": "4.1.4",
     "@typeonce/oxlint-plugin-ritmo": "0.23.0",
     "@typeonce/ritmo-devtools": "0.23.0",
     "@types/node": "25.5.0",
@@ -29,5 +43,10 @@
     "playwright-core": "1.64.0",
     "typescript": "7.0.2",
     "vite": "8.3.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "workerd"
+    ]
   }
 }

@@ -1,9 +1,11 @@
 /**
  * Let the simulation's bot drive the real page, and take pictures on the way.
  *
- *   node scripts/drive.ts [out-prefix] [--size 1600x900] [--laps 1] [--variant car]
+ *   node scripts/drive.ts [out-prefix] [--size 1600x900] [--laps 1] [--variant car] [--path "/?server=fake"] [--shots all|finish]
  *
- * The bot's input replaces the keyboard's inside the page. A picture is taken at the
+ * The bot's input replaces the keyboard's inside the page (through `__race.drive`, so it goes
+ * through `quantise` and the lap recorder like a player's). `--shots finish` takes pictures
+ * only at the finish and the end. A picture is taken at the
  * start, at each event worth seeing (take-off, landing, a prop or a door hit, checkpoint, finish), and
  * at the end. Console errors and warnings are printed; the exit code is 1 on an error or
  * when the laps were not finished.
@@ -29,7 +31,7 @@ page.on("pageerror", (error) => {
   errors += 1
   console.log(`page error: ${String(error)}`)
 })
-await page.goto("http://localhost:5380/", { waitUntil: "load" })
+await page.goto(`http://localhost:5380${option("path", "/")}`, { waitUntil: "load" })
 await page.waitForTimeout(2500)
 await page.screenshot({ path: `${prefix}-0-ready.png` })
 await page.evaluate(async (variant) => {
@@ -40,13 +42,8 @@ await page.evaluate(async (variant) => {
   const log: Array<{ kind: string; at: number }> = []
   const state = { finishes: 0, restartAt: -1, frames: 0, log }
   ;(window as any).__drive = state
-  const tick = session.tick.bind(session)
+  race.drive = (view: any, track: any) => ({ ...sim.botInput(view, track), restart: state.restartAt === view.tick })
   const drain = session.drainEvents.bind(session)
-  session.tick = () => {
-    const view = session.view()
-    const restart = state.restartAt === view.tick
-    tick({ ...sim.botInput(view, session.track), restart })
-  }
   session.drainEvents = () => {
     const events = drain()
     for (const event of events) {
@@ -76,7 +73,8 @@ while (Date.now() - started < laps * 60000) {
     const key = `${index}:${entry.kind}`
     if (seen.has(key)) continue
     seen.add(key)
-    if (["takeoff", "land", "prop", "door", "bollard", "finish", "checkpoint", "boost"].includes(entry.kind) && shots < 24) {
+    const worth = option("shots", "all") === "finish" ? ["finish"] : ["takeoff", "land", "prop", "door", "bollard", "finish", "checkpoint", "boost"]
+    if (worth.includes(entry.kind) && shots < 24) {
       if (entry.kind === "takeoff") await page.waitForTimeout(250)
       await page.screenshot({ path: `${prefix}-${shots}-${entry.kind}.png` })
       shots += 1

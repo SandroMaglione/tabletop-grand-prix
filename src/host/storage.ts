@@ -1,75 +1,81 @@
 /**
- * What the page keeps between visits, in localStorage: the best lap of each track (its
- * time, splits and ghost) and two settings (the handling variant and sound on or off).
+ * Where this device keeps what the game saves, as Effect's `KeyValueStore`, so nothing else
+ * knows. In a browser that is IndexedDB; where a browser refuses it (some private modes) the
+ * game keeps things in memory for the visit and plays the same.
  *
- * Every read and write is wrapped: a private window or blocked storage reads as empty and
- * writes nothing, and the game runs the same without it.
+ * Every key starts with `storagePrefix`. What belongs to one board (a track under one
+ * version of the rules) is filed under `boardKey`, so a new track or new rules start clean
+ * and never read a lap driven under something else.
  */
-import type { TrackData } from "../sim/index.ts"
+import { BrowserKeyValueStore, IndexedDb } from "@effect/platform-browser"
+import { Effect, Layer } from "effect"
+import * as KeyValueStore from "effect/persistence/KeyValueStore"
 
-/** The best lap of one track, with the ghost recorded on it. */
-export interface BestLap {
-  readonly timeMs: number
-  /** Time at each checkpoint, the finish line last, as `LapView.splitsMs` gave it. */
-  readonly splitsMs: ReadonlyArray<number>
-  /**
-   * The ghost: one pose every few ticks, flat, seven numbers each:
-   * elapsed ms, x, y, z, yaw, pitch, roll.
-   */
-  readonly poses: ReadonlyArray<number>
-}
+/** Every key this game stores starts with this, so a shared origin cannot mix games. */
+export const storagePrefix = "tabletop-grand-prix/"
 
-/** Numbers per ghost pose in `BestLap.poses`. */
-export const poseStride = 7
+/** The key of what one board keeps: `<kind>/<track id>/<rules version>`. */
+export const boardKey = (kind: string, track: string, rules: number): string => `${kind}/${track}/${rules}`
 
-const prefix = "tabletop-grand-prix"
+const database = "tabletop-grand-prix-saves"
 
-/** One key per track: its name and length, so a changed track starts with no best lap. */
-const bestKey = (track: TrackData): string =>
-  `${prefix}:best:${track.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${Math.round(track.length)}`
+/** Whether the browser lets the page open a database at all; tried on a database of its own, so the saves' one is created by the store with its tables. */
+const canOpen = Effect.tryPromise(
+  () =>
+    new Promise<void>((resolve, reject) => {
+      const opening = window.indexedDB.open("tabletop-grand-prix-probe")
+      opening.onerror = () => reject(opening.error)
+      opening.onsuccess = () => {
+        opening.result.close()
+        resolve()
+      }
+    })
+)
 
-const read = (key: string): string | null => {
+const indexedDbStore = BrowserKeyValueStore.layerIndexedDb({ database }).pipe(Layer.provide(IndexedDb.layerWindow))
+
+/** The store in IndexedDB once one read from it worked; in memory otherwise. */
+export const storageLayer: Layer.Layer<KeyValueStore.KeyValueStore> = Layer.unwrap(
+  canOpen.pipe(
+    Effect.andThen(
+      Effect.gen(function*() {
+        const store = yield* KeyValueStore.KeyValueStore
+        yield* store.get("probe")
+      }).pipe(Effect.provide(indexedDbStore))
+    ),
+    Effect.timeout("2 seconds"),
+    Effect.as(indexedDbStore),
+    Effect.catchCause((cause) => {
+      console.warn("saves are kept in memory for this visit", cause)
+      return Effect.succeed(KeyValueStore.layerMemory)
+    })
+  )
+)
+
+/** The page's store, under the game's prefix. */
+export const gameStore: Effect.Effect<KeyValueStore.KeyValueStore, never, KeyValueStore.KeyValueStore> = Effect.gen(function*() {
+  return KeyValueStore.prefix(yield* KeyValueStore.KeyValueStore, storagePrefix)
+})
+
+/**
+ * The saves of the build before this one sat in localStorage: the best laps as positions,
+ * which are dropped (a best lap is now a replay), and the two settings, which are handed
+ * back once so the player keeps them. Every old key is removed.
+ */
+export const takeLegacySettings = (): { readonly steering: string | null; readonly muted: boolean | null } => {
   try {
-    return window.localStorage.getItem(key)
+    const storage = window.localStorage
+    const old = "tabletop-grand-prix:"
+    const steering = storage.getItem(`${old}variant`)
+    const muted = storage.getItem(`${old}muted`)
+    const keys: Array<string> = []
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)
+      if (key !== null && key.startsWith(old)) keys.push(key)
+    }
+    for (const key of keys) storage.removeItem(key)
+    return { steering, muted: muted === null ? null : muted === "1" }
   } catch {
-    return null
+    return { steering: null, muted: null }
   }
 }
-
-const write = (key: string, value: string): void => {
-  try {
-    window.localStorage.setItem(key, value)
-  } catch {
-    // Storage full or blocked: the game goes on without saving.
-  }
-}
-
-const isNumberArray = (value: unknown): value is ReadonlyArray<number> =>
-  Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isFinite(item))
-
-export const loadBest = (track: TrackData): BestLap | null => {
-  const raw = read(bestKey(track))
-  if (raw === null) return null
-  try {
-    const data: unknown = JSON.parse(raw)
-    if (typeof data !== "object" || data === null) return null
-    const { timeMs, splitsMs, poses } = data as { readonly timeMs?: unknown; readonly splitsMs?: unknown; readonly poses?: unknown }
-    if (typeof timeMs !== "number" || !Number.isFinite(timeMs) || timeMs <= 0) return null
-    if (!isNumberArray(splitsMs) || !isNumberArray(poses) || poses.length % poseStride !== 0) return null
-    return { timeMs, splitsMs, poses }
-  } catch {
-    return null
-  }
-}
-
-/** Rounds the ghost to millimetres and thousandths of a radian, so it stays small as JSON. */
-export const saveBest = (track: TrackData, best: BestLap): void => {
-  const poses = best.poses.map((value) => Math.round(value * 1000) / 1000)
-  write(bestKey(track), JSON.stringify({ timeMs: best.timeMs, splitsMs: best.splitsMs, poses }))
-}
-
-export const loadVariant = (): string | null => read(`${prefix}:variant`)
-export const saveVariant = (name: string): void => write(`${prefix}:variant`, name)
-
-export const loadMuted = (): boolean => read(`${prefix}:muted`) === "1"
-export const saveMuted = (muted: boolean): void => write(`${prefix}:muted`, muted ? "1" : "0")

@@ -264,7 +264,7 @@ export interface RaceSession {
   view(): RaceView
   /** Every event since the last call, oldest first. */
   drainEvents(): ReadonlyArray<RaceEvent>
-  /** Names of the handling variants in `tuning.ts`. */
+  /** The ways to steer (`STEERINGS` in `schema.ts`): by the wheel, or by pointing where to go. */
   readonly variants: ReadonlyArray<string>
   /** The variant in use. */
   variant(): string

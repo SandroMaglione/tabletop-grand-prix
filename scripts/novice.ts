@@ -9,13 +9,13 @@
 import { botInput } from "../src/sim/bot.ts"
 import { createSession, track } from "../src/sim/index.ts"
 import { angleDelta, indexAt, locateNear, pointAt } from "../src/sim/track/query.ts"
-import { variants } from "../src/sim/tuning.ts"
+import { handling } from "../src/sim/tuning.ts"
 import type { DriveInput, RaceView } from "../src/sim/index.ts"
 
 for (const arg of process.argv.slice(2)) {
   const [key, value] = arg.split("=")
   if (key === undefined || value === undefined) continue
-  for (const name of ["car", "car-loose", "screen"] as const) (variants[name] as unknown as Record<string, number>)[key] = Number(value)
+  ;(handling as unknown as Record<string, number>)[key] = Number(value)
 }
 
 type Kind = "flat" | "lifter" | "braker" | "screen" | "stick" | "lead"

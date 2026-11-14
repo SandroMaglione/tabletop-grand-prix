@@ -5,7 +5,8 @@
   "rules": {
     "ritmo/handle-runtime-result": "error",
     "ritmo/prefix-descriptor-and-system-names": "error",
-    "ritmo/no-state-spread": "error"
+    "ritmo/no-state-spread": "error",
+    "ritmo/no-kept-query-values": "error"
   },
   "overrides": [
     {
@@ -29,7 +30,14 @@
                   "../host/*",
                   "**/host/**"
                 ],
-                "message": "The simulation never imports page code: the page reads the match through the simulation's inspector and sends intents."
+                "message": "The simulation never imports page code: the page reads the race through the simulation's inspector and gives it input."
+              },
+              {
+                "group": [
+                  "**/api/**",
+                  "**/server/**"
+                ],
+                "message": "The simulation knows nothing of the leaderboard: the server and the page import the simulation, never the other way."
               }
             ]
           }
@@ -50,7 +58,54 @@
                   "**/sim/*",
                   "!**/sim/index.ts"
                 ],
-                "message": "The page reads the simulation only through src/sim/index.ts: its runtime, inspector, intents and the rule helpers it draws with."
+                "message": "The page reads the simulation only through src/sim/index.ts: its session, its replays and the track queries it draws with."
+              },
+              {
+                "group": [
+                  "**/server/**"
+                ],
+                "message": "The page talks to the server only through the Leaderboard service in src/api."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/api/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/host/**",
+                  "**/server/**"
+                ],
+                "message": "src/api is what the page and the server share: it imports neither."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/server/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/host/**"
+                ],
+                "message": "The server never imports page code: it shares src/api and the simulation with it."
               }
             ]
           }

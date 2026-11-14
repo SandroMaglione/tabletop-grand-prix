@@ -11,49 +11,12 @@
 import { Ops } from "@typeonce/ritmo"
 import type { CarWork } from "./car.ts"
 import { angleDelta, locateBelow, locateNear } from "./track/query.ts"
-import { contact, propPhysics } from "./tuning.ts"
-import type { Handling } from "./tuning.ts"
+import type { DoorState, ObstacleState, PropState } from "./schema.ts"
+import { propPhysics } from "./tuning.ts"
+import type { Contact, Handling } from "./tuning.ts"
 import type { RaceEvent, SwingDoor, TrackData } from "./types.ts"
 
-/** A prop between ticks. */
-export interface PropState {
-  readonly x: number
-  readonly z: number
-  /** Height of the road under it, and how far its base is above that. */
-  readonly roadY: number
-  readonly lift: number
-  readonly vx: number
-  readonly vz: number
-  /** Vertical speed while it falls. */
-  readonly vlift: number
-  readonly yaw: number
-  /** Turn rate around the vertical, rad/s. */
-  readonly spin: number
-  /** Sample index near it, the search hint for `locateNear`. */
-  readonly hint: number
-  /** False once it rests: a resting prop costs nothing until something touches it. */
-  readonly awake: boolean
-  /** The car touched it last tick. Sends one `prop` event per contact. */
-  readonly touched: boolean
-  /** The wall it leans on: 1 left, -1 right, 0 none. A prop held against a wall cannot be pushed further into it. */
-  readonly wall: number
-}
-
-export interface DoorState {
-  /** Turn from closed, radians. */
-  readonly angle: number
-  /** Turn rate, rad/s. */
-  readonly speed: number
-  readonly touched: boolean
-}
-
-/** Everything the car can knock into, between ticks. */
-export interface ObstacleState {
-  readonly props: ReadonlyArray<PropState>
-  readonly doors: ReadonlyArray<DoorState>
-  /** Index of the post the car touched last tick, or -1. */
-  readonly post: number
-}
+export type { DoorState, ObstacleState, PropState }
 
 type PropWork = { -readonly [K in keyof PropState]: PropState[K] }
 type DoorWork = { -readonly [K in keyof DoorState]: DoorState[K] }
@@ -61,6 +24,7 @@ type DoorWork = { -readonly [K in keyof DoorState]: DoorState[K] }
 export interface ObstacleContext {
   readonly track: TrackData
   readonly handling: Handling
+  readonly contact: Contact
   readonly dt: number
   readonly emit: (event: RaceEvent) => void
 }
@@ -87,7 +51,7 @@ export const restingObstacles = (track: TrackData): ObstacleState => ({
     }
   }),
   doors: track.doors.map(() => ({ angle: 0, speed: 0, touched: false })),
-  post: -1
+  post: null
 })
 
 /** Whether two things overlap in height: bases `a` and `b`, heights `ha` and `hb`. */
@@ -116,7 +80,7 @@ export const stepObstacles = (car: CarWork, state: ObstacleState, context: Obsta
 // ── Props ──────────────────────────────────────────────────────────────
 
 const stepProps = (car: CarWork, before: ReadonlyArray<PropState>, context: ObstacleContext): ReadonlyArray<PropState> => {
-  const { track, handling, dt, emit } = context
+  const { track, handling, contact, dt, emit } = context
   const props: Array<PropWork> = before.map((prop) => ({ ...prop }))
   const shapeOf = (index: number) => {
     const shape = track.props[index]
@@ -194,7 +158,8 @@ const stepProps = (car: CarWork, before: ReadonlyArray<PropState>, context: Obst
       const side = hit.d >= 0 ? 1 : -1
       const inner = hit.halfWidth - shape.radius
       const walled = side > 0 ? hit.wallLeft : hit.wallRight
-      if (walled && Math.abs(hit.d) > inner && prop.lift < track.wallHeight) {
+      // A wall holds a prop at any height: props never leave the road, so there is never one to place off it.
+      if (walled && Math.abs(hit.d) > inner) {
         const lx = Ops.cos(hit.yaw)
         const lz = -Ops.sin(hit.yaw)
         const over = Math.abs(hit.d) - inner
@@ -349,6 +314,23 @@ const stepProps = (car: CarWork, before: ReadonlyArray<PropState>, context: Obst
     }
   }
 
+  // What the car and the other props pushed through a wall goes back inside it. Only the
+  // place: the wall takes the speed on the next tick's contact.
+  for (let index = 0; index < props.length; index++) {
+    const prop = props[index]
+    if (prop === undefined || (!prop.awake && !prop.touched)) continue
+    const hit = locateNear(track, prop.x, prop.z, prop.hint, 12)
+    if (!hit.surface) continue
+    const side = hit.d >= 0 ? 1 : -1
+    const inner = hit.halfWidth - shapeOf(index).radius
+    if (!(side > 0 ? hit.wallLeft : hit.wallRight) || Math.abs(hit.d) <= inner) continue
+    const over = Math.abs(hit.d) - inner
+    prop.x -= Ops.cos(hit.yaw) * over * side
+    prop.z += Ops.sin(hit.yaw) * over * side
+    prop.hint = hit.index
+    prop.wall = side
+  }
+
   // Rest.
   for (let index = 0; index < props.length; index++) {
     const prop = props[index]
@@ -366,10 +348,10 @@ const stepProps = (car: CarWork, before: ReadonlyArray<PropState>, context: Obst
 
 // ── Posts ──────────────────────────────────────────────────────────────
 
-/** The car against the fixed posts: it slides round them and loses speed by how square it hit. Returns the post touched, or -1. */
-const hitPosts = (car: CarWork, before: number, context: ObstacleContext): number => {
-  const { track, handling, emit } = context
-  let touched = -1
+/** The car against the fixed posts: it slides round them and loses speed by how square it hit. Returns the post touched, or null. */
+const hitPosts = (car: CarWork, before: number | null, context: ObstacleContext): number | null => {
+  const { track, handling, contact, emit } = context
+  let touched: number | null = null
   for (let index = 0; index < track.bollards.length; index++) {
     const post = track.bollards[index]
     if (post === undefined) continue
@@ -406,10 +388,10 @@ const hitPosts = (car: CarWork, before: number, context: ObstacleContext): numbe
 // ── Doors ──────────────────────────────────────────────────────────────
 
 /** The leaf's turning inertia about its hinge, for a mass spread evenly along it. */
-const inertiaOf = (door: SwingDoor): number => (contact.doorMass * door.length * door.length) / 3
+const inertiaOf = (door: SwingDoor, contact: Contact): number => (contact.doorMass * door.length * door.length) / 3
 
 const stepDoors = (car: CarWork, before: ReadonlyArray<DoorState>, context: ObstacleContext): ReadonlyArray<DoorState> => {
-  const { track, handling, dt, emit } = context
+  const { track, handling, contact, dt, emit } = context
   let doors: Array<DoorWork> | null = null
   for (let index = 0; index < track.doors.length; index++) {
     const door = track.doors[index]
@@ -453,11 +435,11 @@ const stepDoors = (car: CarWork, before: ReadonlyArray<DoorState>, context: Obst
         if (closing > 0) {
           // Against its end stop it cannot turn further: the car meets something fixed.
           const blocked = Math.abs(angle) >= door.maxAngle - 1e-6 && Math.sign(-lever) === Math.sign(angle)
-          const give = blocked ? 0 : (lever * lever) / inertiaOf(door)
+          const give = blocked ? 0 : (lever * lever) / inertiaOf(door, contact)
           const impulse = ((1 + contact.doorBounce) * closing) / (1 + give)
           car.vx += impulse * nx
           car.vz += impulse * nz
-          if (!blocked) speed -= (impulse * lever) / inertiaOf(door)
+          if (!blocked) speed -= (impulse * lever) / inertiaOf(door, contact)
           if (!was.touched && closing > contact.eventFrom) emit({ kind: "door", index, impact: closing, x: door.x + ux * along, y: door.y, z: door.z + uz * along })
         }
         car.x += nx * (reach - distance)
