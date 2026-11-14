@@ -1,0 +1,34 @@
+{
+  "name": "tabletop-grand-prix",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "dev": "vite --host --port 5380",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --pretty false",
+    "lint": "oxlint src test scripts",
+    "lint:sim": "ritmo-devtools lint src/lint.ts",
+    "test": "node --test \"test/*.test.ts\"",
+    "bot": "node scripts/bot.ts",
+    "shot": "node scripts/shot.ts",
+    "check": "pnpm typecheck"
+  },
+  "dependencies": {
+    "@pixi/3d": "0.1.0",
+    "@typeonce/ritmo": "0.23.0",
+    "@typeonce/ritmo-browser": "0.23.0",
+    "earcut": "^3.2.4",
+    "pixi.js": "8.23.0"
+  },
+  "devDependencies": {
+    "@typeonce/oxlint-plugin-ritmo": "0.23.0",
+    "@typeonce/ritmo-devtools": "0.23.0",
+    "@types/node": "25.5.0",
+    "@types/web": "^0.0.366",
+    "oxlint": "1.92.0",
+    "playwright-core": "1.64.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.6"
+  }
+}
