@@ -7,9 +7,11 @@
  *
  * Node chain, outermost first: `root` (position, yaw, pop-in scale) > `pitch` > `roll` (the
  * view's pose) > `body` (lean, squat and bounce, for the picture only). Wheels hang from `roll`,
- * so they stay on the road while the body moves on its springs.
+ * so they stay on the road while the body moves on its springs. The body leans about the
+ * axles' height, and the wheels follow its stretch and squash along the ground, so each stays
+ * under its arch instead of the body swinging off it and the tyre showing through.
  */
-import { Container3D, CylinderGeometry, Material3D, Mesh3D, PointLight, TorusGeometry } from "@pixi/3d"
+import { Container3D, CylinderGeometry, Material3D, Mesh3D, PointLight, TorusGeometry, Vector3 } from "@pixi/3d"
 import type { Geometry3D } from "@pixi/3d"
 import type { CarView } from "../../sim/index.ts"
 import type { GhostPose } from "../contract.ts"
@@ -32,6 +34,12 @@ export const WHEELS: ReadonlyArray<readonly [number, number]> = [
   [CAR.wheelX, -CAR.wheelZ],
   [-CAR.wheelX, -CAR.wheelZ]
 ]
+
+/** The height the body leans about: the axles'. */
+const AXLE = CAR.wheelRadius
+/** Where each wheel arch sits on the body: this far out from its wheel, at this height (its middle). */
+const ARCH_OUT = 0.02
+const ARCH_Y = 0.52
 
 interface Shapes {
   readonly lower: Geometry3D
@@ -126,6 +134,8 @@ export interface CarModel {
   readonly steer: ReadonlyArray<Container3D>
   /** Every wheel spins about X. */
   readonly spin: ReadonlyArray<Container3D>
+  /** Every wheel's pivot and where it stands at rest, in `roll`'s frame. */
+  readonly wheels: ReadonlyArray<{ readonly pivot: Container3D; readonly x: number; readonly z: number }>
 }
 
 /** Builds one car. The ghost leaves out the small parts, so fewer see-through layers stack up. */
@@ -140,7 +150,7 @@ export const buildCar = (look: CarLook, ghost: boolean): CarModel => {
     new Mesh3D({ geometry, material, position: { x, y, z }, castShadow: shadow, receiveShadow: shadow, parent })
 
   part(s.lower, look.body, 0, 0.38, 0, body)
-  for (const [x, z] of [[0.56, 0.78], [-0.56, 0.78], [0.56, -0.78], [-0.56, -0.78]] as const) part(s.arch, look.body, x, 0.52, z, body)
+  for (const [x, z] of WHEELS) part(s.arch, look.body, x + Math.sign(x) * ARCH_OUT, ARCH_Y, z, body)
   part(s.cabin, look.glass, 0, 0.74, -0.22, body)
   part(s.roof, look.body, 0, 0.925, -0.38, body)
   if (!ghost) {
@@ -158,6 +168,7 @@ export const buildCar = (look: CarLook, ghost: boolean): CarModel => {
 
   const steer: Array<Container3D> = []
   const spin: Array<Container3D> = []
+  const wheels: Array<{ pivot: Container3D; x: number; z: number }> = []
   for (const [x, z] of WHEELS) {
     const pivot = new Container3D({ position: { x, y: CAR.wheelRadius, z }, parent: roll })
     const spinner = new Container3D({ parent: pivot })
@@ -169,8 +180,9 @@ export const buildCar = (look: CarLook, ghost: boolean): CarModel => {
     }
     if (z > 0) steer.push(pivot)
     spin.push(spinner)
+    wheels.push({ pivot, x, z })
   }
-  return { root, pitch, roll, body, steer, spin }
+  return { root, pitch, roll, body, steer, spin, wheels }
 }
 
 /** Places a model at a pose. */
@@ -199,6 +211,8 @@ export const createCar = (parent: Container3D) => {
   // it brakes. Off (and free) the rest of the time.
   const brakeLight = new PointLight({ color: palette.brakeGlow, intensity: 0, range: 3.6, visible: false, position: { x: 0, y: 0.55, z: -1.75 }, parent: model.body })
   let brakeOn = 0
+  /** An arch's middle in `roll`'s frame, worked out each frame. */
+  const archAt = new Vector3()
   let wheelAngle = 0
   let steerAngle = 0
   let leanPitch = 0
@@ -280,7 +294,7 @@ export const createCar = (parent: Container3D) => {
       const sin = Math.sin(car.yaw)
       const lateral = car.vx * cos - car.vz * sin
       const turning = car.grounded ? car.steer * clamp(Math.abs(car.speed) / 25, 0, 1) : 0
-      const rollTarget = car.grounded ? clamp(turning * 0.17 - lateral * 0.035, -0.26, 0.26) : 0
+      const rollTarget = car.grounded ? clamp(turning * 0.17 - lateral * 0.035, -0.2, 0.2) : 0
       const braking = car.brake > 0.05 && car.speed > 0.5 ? car.brake : 0
       // A cut to the start line is not a braking: forget the speed from before it.
       if (pop === 0 || dt <= 0) lastSpeed = car.speed
@@ -311,7 +325,15 @@ export const createCar = (parent: Container3D) => {
       model.body.scale.set((1 - long * 0.3 + flat * 0.4) * (1 - thin), (1 - long * 0.45) * (1 - flat), (1 + long + flat * 0.3) * (1 + thin * 0.35))
       model.body.rotation.x = -leanPitch
       model.body.rotation.z = leanRoll
-      model.body.position.y = clamp(bounce, -0.2, 0.12)
+      // The lean turns the body about the axles' height, not the ground: the arches stay over the tyres.
+      model.body.position.set(AXLE * Math.sin(leanRoll), clamp(bounce, -0.2, 0.12) + AXLE * (1 - Math.cos(leanRoll)), 0)
+      // Each wheel goes where the leaning, stretched or squashed body puts its arch, never
+      // above the road: an arch that dips presses its tyre a little into the road (unseen from
+      // above) instead of the tyre showing through the arch's top.
+      for (const wheel of model.wheels) {
+        model.roll.toLocal({ x: wheel.x + Math.sign(wheel.x) * ARCH_OUT, y: ARCH_Y, z: wheel.z }, model.body, archAt)
+        wheel.pivot.position.set(archAt.x - Math.sign(wheel.x) * ARCH_OUT, Math.min(CAR.wheelRadius, archAt.y - (ARCH_Y - CAR.wheelRadius)), archAt.z)
+      }
 
       if (brakeGlow !== undefined) brakeGlow.strength = braking > 0 ? 3.2 : 0.25
       brakeOn = approach(brakeOn, braking > 0 ? 1 : 0, braking > 0 ? 30 : 12, dt)

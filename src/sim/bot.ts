@@ -3,9 +3,9 @@
  *
  * It reads only what a player could see: the car, the track's shape and where the posts and
  * props are. It follows the centreline with a look-ahead, slows for the curvature ahead,
- * keeps the throttle down over boost pads and jumps, steers past the things in the road and
- * drives through the swing doors where the leaves meet. It holds no state: the same view
- * gives the same input.
+ * keeps the throttle down over boost pads and jumps, steers past the things in the road,
+ * drives through the swing doors where the leaves meet, and drifts round the tight corners
+ * that are long enough to pay for it. It holds no state: the same view gives the same input.
  */
 import { Ops } from "@typeonce/ritmo"
 import { angleDelta, indexAt, locateNear, pointAt } from "./track/query.ts"
@@ -30,7 +30,15 @@ const plan = {
   /** Gap it keeps to the things in the road, metres. */
   clearance: 0.3,
   /** Things within this far of the nearest one count as the same row, metres. */
-  row: 4
+  row: 4,
+  /** It drifts round corners at least this tight, metres of radius, that go on for at least `driftAhead` metres more. */
+  driftRadius: 14,
+  driftAhead: 10,
+  /** It does not start a drift with a tight corner the other way within this far, metres. */
+  driftClear: 45,
+  /** How hard it corrects a drift: wheel per metre outside its line, and per radian of heading out of the corner. */
+  driftHold: 0.4,
+  driftTurnIn: 2
 }
 
 const clamp = (value: number, low: number, high: number): number => Math.min(high, Math.max(low, value))
@@ -114,6 +122,45 @@ const targetSpeed = (view: RaceView, track: TrackData, s: number): number => {
 const committed = (track: TrackData, s: number): boolean =>
   track.features.some((feature) => (feature.kind === "jump" || feature.kind === "boost") && aheadOf(track, feature.sFrom - 6, s) <= feature.sTo - feature.sFrom + 6)
 
+/** The corner at `s`, as it turns over the next few metres: its side (1 left, -1 right) and how tightly it curves, 1/m. */
+const curveAt = (track: TrackData, s: number): { side: number; curve: number } => {
+  const turn = angleDelta(pointAt(track, s).yaw, pointAt(track, s + 3).yaw) / 3
+  return { side: turn >= 0 ? 1 : -1, curve: Math.abs(turn) }
+}
+
+/**
+ * The wheel that holds a drift round the corner the car is in, or null when this is no
+ * place to drift: a corner tight enough, with enough of it left, nothing standing in it,
+ * and no jump or pad to keep straight for. The wheel is what the corner's own radius asks
+ * of the drift's arc, corrected by how far outside the centreline the car is and by how far
+ * its way points out of the corner.
+ */
+const driftWheel = (view: RaceView, track: TrackData, here: { readonly s: number; readonly d: number; readonly yaw: number }, clear: boolean): number | null => {
+  const handling = carHandling
+  const now = curveAt(track, here.s + 1)
+  const drifting = view.car.drift !== null
+  // Once sliding it holds on until the corner straightens; to start one it wants more corner ahead.
+  const ahead = curveAt(track, here.s + (drifting ? 2.5 : plan.driftAhead))
+  const tight = 1 / plan.driftRadius
+  if (now.curve < tight * (drifting ? 0.8 : 1) || ahead.curve < tight * 0.8 || ahead.side !== now.side) return null
+  if (!drifting && (!clear || !view.car.grounded || view.car.speed < handling.driftFrom + 1 || committed(track, here.s))) return null
+  // A slide ends with a push: not into a corner that turns the other way just after this one.
+  if (!drifting) {
+    for (let distance = plan.driftAhead; distance <= plan.driftClear; distance += 3) {
+      const next = curveAt(track, here.s + distance)
+      if (next.side !== now.side && next.curve >= tight * 0.8) return null
+    }
+  }
+  const neutral = 1 / handling.driftNeutral
+  const asked = now.curve >= neutral ? (now.curve - neutral) / (1 / handling.driftTight - neutral) : (now.curve - neutral) / (neutral - 1 / handling.driftWide)
+  const outside = -here.d * now.side
+  const travel = Ops.atan2(view.car.vx, view.car.vz)
+  const headingOut = -angleDelta(here.yaw, travel) * now.side
+  const inward = clamp(asked + plan.driftHold * outside + plan.driftTurnIn * headingOut, -1, 1)
+  // The slide starts with the wheel turned its way.
+  return now.side * (drifting ? inward : Math.max(0.3, inward))
+}
+
 export const botInput = (view: RaceView, track: TrackData): DriveInput => {
   const { car } = view
   const here = locateNear(track, car.x, car.z, indexAt(track, car.s), 32)
@@ -152,5 +199,8 @@ export const botInput = (view: RaceView, track: TrackData): DriveInput => {
   } else if (speed > target - 0.5) {
     throttle = 0.3
   }
+  // A corner worth sliding round: both pedals down, and the wheel that holds the slide in the road.
+  const slide = driftWheel(view, track, here, line.distance === null)
+  if (slide !== null) return { throttle: 1, brake: 1, steer: slide, aim: { x: dx, z: dz }, restart: false }
   return { throttle, brake, steer, aim: { x: dx, z: dz }, restart: false }
 }

@@ -2,6 +2,8 @@
 import { driveCar } from "../car.ts"
 import type { CarWork } from "../car.ts"
 import { Car, CourseService, Game, Happened, HandlingValues, Input, Lap, ResetRequest, SteeringMode, Time } from "../state.ts"
+import { Clock } from "@typeonce/ritmo"
+import { boostFade } from "../tuning.ts"
 import { speedLimit } from "./boost.ts"
 
 export const DriveCar = Game.System(
@@ -30,6 +32,8 @@ export const DriveCar = Game.System(
       limit: speedLimit(car.boost, handling, time),
       onPad: car.boost._tag === "pad",
       ready: resources.lap.get()._tag === "ready",
+      now: time.step,
+      boostUntil: Clock.deadline(time, boostFade),
       emit: (event) => events.happened.emit(event)
     })
     resources.car.set(car)

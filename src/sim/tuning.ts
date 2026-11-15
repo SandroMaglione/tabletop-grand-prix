@@ -176,6 +176,33 @@ export interface Handling {
   /** The same in water. */
   readonly waterDrag: number
 
+  // Drifting: gas and brake held together in a turn slide the car round it (`stepDrift` in `car.ts`).
+  /** Speed a drift needs to start, m/s; it ends below `driftKeep` of it. */
+  readonly driftFrom: number
+  readonly driftKeep: number
+  /** How far the wheel must be turned to start one. */
+  readonly driftSteer: number
+  /** The radius of the arc a drifting car goes round on, metres: with the wheel let go, held toward the turn, and held away from it. */
+  readonly driftNeutral: number
+  readonly driftTight: number
+  readonly driftWide: number
+  /** The most a drifting car turns sideways, m/s^2 (gripping it is `turnAccel`). */
+  readonly driftAccel: number
+  /** Share of the brake left when it is pressed with the gas down and no drift starts. */
+  readonly driftBrake: number
+  /** How far the nose swings back toward where the car was going when a drift is let go, 0 (it leaves along its nose) to 1. */
+  readonly driftSettle: number
+  /** How far the nose points inside the way the car goes while it drifts, radians, and how fast it swings there, 1/s. */
+  readonly driftAngle: number
+  readonly driftSwing: number
+  /** While drifting a held turn costs this share of `turnDrag`. */
+  readonly driftDrag: number
+  /** Seconds of drift before letting go pays anything, and seconds for the full push. */
+  readonly driftMin: number
+  readonly driftFull: number
+  /** The full push at the end of a drift, m/s. */
+  readonly driftKick: number
+
   // Bumps.
   /** Speed below which a bump is only rolled over, m/s. */
   readonly bumpFrom: number
@@ -231,6 +258,21 @@ export const handling: Handling = {
   boostTopSpeed: 36,
   grassDrag: 0.15,
   waterDrag: 0.6,
+  driftFrom: 10,
+  driftKeep: 0.6,
+  driftSteer: 0.2,
+  driftNeutral: 12,
+  driftTight: 7.5,
+  driftWide: 26,
+  driftAccel: 60,
+  driftBrake: 0.35,
+  driftSettle: 0.7,
+  driftAngle: 0.62,
+  driftSwing: 10,
+  driftDrag: 0.35,
+  driftMin: 0.35,
+  driftFull: 1.3,
+  driftKick: 5,
   bumpFrom: 6,
   bumpKick: 0.13,
   bumpKickMax: 3.4,
@@ -283,6 +325,21 @@ export const handlingMeta = {
   boostTopSpeed: { unit: "m/s", range: [30, 50] },
   grassDrag: { unit: "1/s", range: [0, 1] },
   waterDrag: { unit: "1/s", range: [0, 2] },
+  driftFrom: { unit: "m/s", range: [5, 25] },
+  driftKeep: { unit: "share", range: [0.2, 1] },
+  driftSteer: { unit: "lock", range: [0.1, 1] },
+  driftNeutral: { unit: "m", range: [8, 25] },
+  driftTight: { unit: "m", range: [5, 15] },
+  driftWide: { unit: "m", range: [15, 60] },
+  driftAccel: { unit: "m/s^2", range: [30, 100] },
+  driftBrake: { unit: "share", range: [0, 1] },
+  driftSettle: { unit: "share", range: [0, 1] },
+  driftAngle: { unit: "rad", range: [0.1, 1] },
+  driftSwing: { unit: "1/s", range: [2, 30] },
+  driftDrag: { unit: "share", range: [0, 1] },
+  driftMin: { unit: "s", range: [0, 1.5] },
+  driftFull: { unit: "s", range: [0.4, 4] },
+  driftKick: { unit: "m/s", range: [0, 12] },
   bumpFrom: { unit: "m/s", range: [2, 15] },
   bumpKick: { unit: "m/s per m/s", range: [0.02, 0.3] },
   bumpKickMax: { unit: "m/s", range: [1, 6], hint: "With gravity, how long the car is off the ground." },

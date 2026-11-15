@@ -47,7 +47,7 @@ export const createFx = (particles: Particles, spawn: Spawn, rand: () => number)
     }
   }
 
-  const sparks = (x: number, y: number, z: number, count: number, vx: number, vz: number): void => {
+  const sparks = (x: number, y: number, z: number, count: number, vx: number, vz: number, color: number = palette.spark): void => {
     for (let n = 0; n < count; n++) {
       spawn.x = x
       spawn.y = y
@@ -59,7 +59,7 @@ export const createFx = (particles: Particles, spawn: Spawn, rand: () => number)
       spawn.size = 0.16 + rand() * 0.1
       spawn.sizeEnd = 0.04
       spawn.alpha = 1
-      spawn.color = palette.spark
+      spawn.color = color
       spawn.drag = 1.5
       spawn.gravity = 16
       particles.glow.emit(spawn)

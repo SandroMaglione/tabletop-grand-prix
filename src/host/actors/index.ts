@@ -91,6 +91,7 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
   const up = vec()
   let lastAttempt = -1
   let smokeClock = 0
+  let driftClock = 0
   let flameClock = 0
   let flameOn = 0
   let launchClock = 0
@@ -181,6 +182,11 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
           if (strength > 0.2) hitLights.blink(event.x, event.y, event.z, strength * 0.6)
           break
         }
+        case "drift":
+          // The push at the end of a drift: the body surges and sparks fly back off the rear.
+          car.surge()
+          sparks(view.car.x - Math.sin(view.car.yaw) * 1.1, view.car.y + 0.3, view.car.z - Math.cos(view.car.yaw) * 1.1, Math.round(6 + event.charge * 14), -view.car.vx * 0.5, -view.car.vz * 0.5, event.charge >= 1 ? palette.driftFull : palette.driftCharge)
+          break
         case "boost": {
           pads.flash(event.index)
           car.surge()
@@ -338,6 +344,19 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
         }
       } else {
         smokeClock = 0
+      }
+
+      // A drift that has earned its push throws sparks off the rear wheels: blue and more of
+      // them as it earns more, orange once the push is whole.
+      if (c.grounded && c.drift !== null && c.drift > 0) {
+        driftClock += dt * (14 + c.drift * 40)
+        while (driftClock >= 1) {
+          driftClock -= 1
+          rotate(c.yaw, c.pitch, c.roll, rand() < 0.5 ? 0.55 : -0.55, 0.1, -0.8, point)
+          sparks(c.x + point.x, c.y + point.y, c.z + point.z, 1, c.vx * 0.3, c.vz * 0.3, c.drift >= 1 ? palette.driftFull : palette.driftCharge)
+        }
+      } else {
+        driftClock = 0
       }
 
       // Boost flame: the cone flickers in, glow particles stream out behind.

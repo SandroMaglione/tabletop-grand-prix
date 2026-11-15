@@ -9,4 +9,4 @@
  * judged by rules they were not driven on. `test/replay.test.ts` holds a lap recorded under
  * the current rules and fails when the rules moved without this number.
  */
-export const rulesVersion = 4
+export const rulesVersion = 5

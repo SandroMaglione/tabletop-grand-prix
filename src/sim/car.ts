@@ -8,7 +8,7 @@
 import { Ops } from "@typeonce/ritmo"
 import { angleDelta, locateBelow, locateNear, surfaceAt } from "./track/query.ts"
 import type { TrackHit } from "./track/query.ts"
-import type { CarState, Steering } from "./schema.ts"
+import type { Boost, CarState, Steering } from "./schema.ts"
 import type { RaceEvent, TrackData } from "./types.ts"
 import type { Handling } from "./tuning.ts"
 
@@ -37,6 +37,10 @@ export interface DriveContext {
   readonly onPad: boolean
   /** The clock has not started: the brake does not reverse. */
   readonly ready: boolean
+  /** The step this tick is. */
+  readonly now: number
+  /** When a raised speed limit that starts now has faded out (a drift's push). */
+  readonly boostUntil: Extract<Boost, { _tag: "fading" }>["until"]
   readonly emit: (event: RaceEvent) => void
 }
 
@@ -68,7 +72,8 @@ export const carAt = (x: number, z: number, yaw: number, hit: TrackHit): CarStat
     prevS: hit.s,
     boost: { _tag: "off" },
     wallSide: 0,
-    load: 0
+    load: 0,
+    drift: { _tag: "grip" }
   }
 }
 
@@ -125,10 +130,13 @@ export const driveCar = (car: CarWork, controls: CarControls, context: DriveCont
   if (car.motion._tag === "road") {
     car.throttle = throttle
     car.brake = brake
-    return driveOnRoad(car, throttle, brake, context)
+    return driveOnRoad(car, throttle, brake, controls, context)
   }
   car.throttle = 0
   car.brake = brake
+  // In the air nothing slides: a drift is over, and pays nothing.
+  if (car.drift._tag === "drift") car.drift = { _tag: "spent" }
+  else if (car.drift._tag === "spent" && brake <= DRIFT_HELD) car.drift = { _tag: "grip" }
   return fly(car, context)
 }
 
@@ -158,20 +166,105 @@ const nextForwardSpeed = (speed: number, throttle: number, brake: number, slope:
   return next
 }
 
-const driveOnRoad = (car: CarWork, throttle: number, brake: number, context: DriveContext): DriveOutcome => {
-  const { handling, dt, track } = context
-  const here = locateNear(track, car.x, car.z, car.hint)
-  const slopes = slopesOf(car.yaw, here)
+/** A drift starts when the brake passes half way down, and holds until it is nearly let go: a trigger that wavers does not drop it. */
+const DRIFT_HELD = 0.25
 
+/** The share of the full push a drift held for `seconds` has earned, 0 to 1. */
+export const driftCharge = (seconds: number, handling: Handling): number => Math.min(1, Math.max(0, (seconds - handling.driftMin) / (handling.driftFull - handling.driftMin)))
+
+/**
+ * The drift, for this tick: whether it starts, goes on, or ends.
+ * - It starts whenever the brake is held with the gas down and the wheel turned, fast enough:
+ *   the two pedals together, in a turn, are the slide.
+ * - It goes on for as long as the brake is held.
+ * - Letting the brake go ends it and pays a push forward by how long it was held; the car
+ *   straightens part of the way back to where it was going, so it leaves between its nose
+ *   and its slide.
+ * - Slowing too far or leaning on a wall ends it and pays nothing.
+ * Returns the side the car drifts to through this tick (1 left, -1 right), or 0 when it grips.
+ */
+const stepDrift = (car: CarWork, controls: CarControls, forward: number, context: DriveContext): number => {
+  const { handling, dt } = context
+  if (car.drift._tag === "grip") {
+    if (controls.brake <= 0.5 || controls.throttle < 0.3 || Math.abs(controls.steer) < handling.driftSteer || forward < handling.driftFrom) return 0
+    const side = controls.steer > 0 ? 1 : -1
+    car.drift = { _tag: "drift", side, since: context.now }
+    return side
+  }
+  if (car.drift._tag === "spent") {
+    if (controls.brake <= DRIFT_HELD) car.drift = { _tag: "grip" }
+    return 0
+  }
+  const { side, since } = car.drift
+  if (forward < handling.driftFrom * handling.driftKeep || car.wallSide !== 0) {
+    car.drift = { _tag: "spent" }
+    return 0
+  }
+  if (controls.brake > DRIFT_HELD) return side
+  // Let go: the car straightens, and a drift held long enough pays its push.
+  car.drift = { _tag: "grip" }
+  const charge = driftCharge((context.now - since) * dt, handling)
+  const speed = Math.sqrt(car.vx * car.vx + car.vz * car.vz)
+  if (speed > 0.5) car.yaw += angleDelta(car.yaw, Ops.atan2(car.vx, car.vz)) * handling.driftSettle
+  const pushed = speed + handling.driftKick * charge
+  car.vx = Ops.sin(car.yaw) * pushed
+  car.vz = Ops.cos(car.yaw) * pushed
+  if (charge > 0) {
+    if (car.boost._tag !== "pad") car.boost = { _tag: "fading", until: context.boostUntil }
+    context.emit({ kind: "drift", charge, x: car.x, y: car.y, z: car.z })
+  }
+  return 0
+}
+
+/**
+ * How fast a drifting car's nose comes round, rad/s: it goes round on an arc of a radius of
+ * its own, which the wheel tightens (toward the turn) or lets run wide (away from it),
+ * within what the tyres can take sideways while sliding.
+ */
+const driftRate = (side: number, steer: number, speed: number, handling: Handling): number => {
+  const inward = clamp(steer * side, -1, 1)
+  const neutral = 1 / handling.driftNeutral
+  const curve = inward >= 0 ? neutral + inward * (1 / handling.driftTight - neutral) : neutral + inward * (neutral - 1 / handling.driftWide)
+  return Math.min(speed * curve, handling.driftAccel / Math.max(speed, 0.1))
+}
+
+/**
+ * One tick of a drifting car's velocity and nose. The car goes round on its arc exactly (the
+ * way it travels turns at the arc's rate), so where a slide will take it can be read off the
+ * road; the nose swings in ahead of that by the slide's angle, more with the wheel held in.
+ * The engine pushes the way the car goes, and the turn costs speed as a held turn does,
+ * less than gripping round would.
+ */
+const slideRound = (car: CarWork, side: number, throttle: number, hold: number, slope: number, context: DriveContext): void => {
+  const { handling, dt } = context
+  car.brake = 0
+  const driven = nextForwardSpeed(Math.sqrt(car.vx * car.vx + car.vz * car.vz), throttle, 0, slope, context)
+  const speed = Math.max(0, driven - driven * hold * dt)
+  const rate = driftRate(side, car.steer, speed, handling)
+  const asked = (side * rate * speed) / handling.turnAccel
+  car.load += (asked - car.load) * (1 - Ops.exp(-handling.turnDragBuild * dt))
+  const carried = Math.max(0, speed - handling.turnDrag * handling.driftDrag * handling.turnAccel * car.load * car.load * dt)
+  const travel = Ops.atan2(car.vx, car.vz) + side * rate * dt
+  car.vx = Ops.sin(travel) * carried
+  car.vz = Ops.cos(travel) * carried
+  const angle = handling.driftAngle * (1 + 0.3 * clamp(car.steer * side, -1, 1))
+  car.yaw += angleDelta(car.yaw, travel + side * angle) * (1 - Ops.exp(-handling.driftSwing * dt))
+  car.slip = 1
+}
+
+/** One tick of a gripping car's velocity and nose: engine and brakes along the heading, the turn, and the tyres taking the sideways part out. */
+const gripRound = (car: CarWork, throttle: number, brake: number, hold: number, slopes: { readonly forward: number; readonly left: number }, context: DriveContext): void => {
+  const { handling, dt } = context
   // Along the heading.
   let fx = Ops.sin(car.yaw)
   let fz = Ops.cos(car.yaw)
   const forward = car.vx * fx + car.vz * fz
   const side = car.vx * fz - car.vz * fx
-  // Grass and water hold the car back by a share of its speed, so a faster car pays more.
-  const ground = surfaceAt(track, here.s, here.d)
-  const hold = ground === "grass" ? handling.grassDrag : ground === "water" ? handling.waterDrag : 0
-  const driven = nextForwardSpeed(forward, throttle, brake, slopes.forward, context)
+  // A brake still held from a slide that was cut short does not slow the car, and with the
+  // gas down the brake only drags, so reaching for a slide a moment early costs little.
+  const braking = car.drift._tag !== "grip" ? 0 : throttle >= 0.3 ? brake * handling.driftBrake : brake
+  if (car.drift._tag !== "grip") car.brake = 0
+  const driven = nextForwardSpeed(forward, throttle, braking, slopes.forward, context)
   const speed = driven - driven * hold * dt
 
   // Turn: a tight radius when slow, a cap on sideways acceleration when fast. A bank that
@@ -209,6 +302,18 @@ const driveOnRoad = (car: CarWork, throttle: number, brake: number, context: Dri
   car.vx = fx * keptForward + fz * gripped
   car.vz = fz * keptForward - fx * gripped
   car.slip = clamp((Math.abs(gripped) - handling.slipFrom) / handling.slipRange, 0, 1)
+}
+
+const driveOnRoad = (car: CarWork, throttle: number, brake: number, controls: CarControls, context: DriveContext): DriveOutcome => {
+  const { handling, dt, track } = context
+  const here = locateNear(track, car.x, car.z, car.hint)
+  const slopes = slopesOf(car.yaw, here)
+  // Grass and water hold the car back by a share of its speed, so a faster car pays more.
+  const ground = surfaceAt(track, here.s, here.d)
+  const hold = ground === "grass" ? handling.grassDrag : ground === "water" ? handling.waterDrag : 0
+  const driftSide = stepDrift(car, controls, car.vx * Ops.sin(car.yaw) + car.vz * Ops.cos(car.yaw), context)
+  if (driftSide !== 0) slideRound(car, driftSide, throttle, hold, slopes.forward, context)
+  else gripRound(car, throttle, brake, hold, slopes, context)
 
   // Move, then find the road again.
   const fromX = car.x

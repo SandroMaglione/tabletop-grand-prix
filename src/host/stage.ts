@@ -106,7 +106,7 @@ vec4 effect(vec2 uv) {
 }
 
 export interface StageOptions {
-  /** Renderer to ask for. WebGL is the default and the one checked against the screenshots. */
+  /** Renderer to ask for. The page passes what `backend.ts` chose; WebGL when nothing is passed (the labs). */
   readonly preference?: "webgl" | "webgpu"
   readonly tiltShift?: boolean
   /**
@@ -121,7 +121,7 @@ export interface StageOptions {
   /** For labs: cap on device pixels per CSS pixel. */
   readonly maxResolution?: number
   /** For labs: look at a point up close instead of the whole track. */
-  readonly focus?: { readonly x: number; readonly z: number; readonly zoom: number }
+  readonly focus?: { readonly x: number; readonly y?: number; readonly z: number; readonly zoom: number }
 }
 
 const DEG = Math.PI / 180
@@ -234,6 +234,7 @@ export const createStage = async (track: TrackData, mount: HTMLElement, options:
   camera.near = CAMERA_DISTANCE * 0.3
   camera.far = CAMERA_DISTANCE * 1.9
 
+  let focus = options.focus
   const fit = (): void => {
     const width = app.screen.width
     const height = app.screen.height
@@ -256,12 +257,13 @@ export const createStage = async (track: TrackData, mount: HTMLElement, options:
     let targetR = (minR + maxR) / 2
     let targetU = (minU + maxU) / 2
     let targetD = (minD + maxD) / 2
-    if (options.focus !== undefined) {
-      pixelsPerMetre *= options.focus.zoom
-      const { x, z } = options.focus
-      targetR = dot(right, x, track.wallHeight, z)
-      targetU = dot(up, x, track.wallHeight, z)
-      targetD = dot(toward, x, track.wallHeight, z)
+    if (focus !== undefined) {
+      pixelsPerMetre *= focus.zoom
+      const { x, z } = focus
+      const y = focus.y ?? track.wallHeight
+      targetR = dot(right, x, y, z)
+      targetU = dot(up, x, y, z)
+      targetD = dot(toward, x, y, z)
     }
     const target = {
       x: right[0] * targetR + up[0] * targetU + toward[0] * targetD,
@@ -286,6 +288,10 @@ export const createStage = async (track: TrackData, mount: HTMLElement, options:
     app,
     view,
     world,
+    focusOn(next) {
+      focus = next ?? undefined
+      fit()
+    },
     groundDirection(screenX, screenY) {
       // Screen right is the camera's `right` on the ground. Screen down is toward the
       // camera, foreshortened by the elevation: a screen distance downward covers

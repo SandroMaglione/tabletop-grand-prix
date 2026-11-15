@@ -8,6 +8,11 @@
  * gathered since the last frame to the actors, the HUD and the sound, then updates the
  * scene, the actors, the HUD and the engine sound, and renders.
  *
+ * Until the first frames are drawn the loading screen of `index.html` is up (`loading.ts`).
+ *
+ * The scene is drawn on WebGPU where the browser's GPU can run PixiJS 3D on it, and on WebGL
+ * elsewhere (`backend.ts`; `?renderer=webgl` asks for WebGL).
+ *
  * Pixi's own ticker is stopped and run from the loop's `render`, so a frame draws the
  * state the simulation just reached, and anything else on Pixi's ticker still runs.
  *
@@ -30,12 +35,14 @@ import { layerHttp } from "../api/http.ts"
 import { createSession, idleInput, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
 import { createActors } from "./actors/index.ts"
 import { createAudio } from "./audio.ts"
+import { chooseBackend } from "./backend.ts"
 import { Bests, boardsLayer, Rivals } from "./boards.ts"
 import type { Stage } from "./contract.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
 import { createMadeWith } from "./brand/made-with.ts"
 import { createHud, hudFont, hudLabelFont, panelAlpha } from "./hud.ts"
 import { createInput } from "./input.ts"
+import { finishLoading } from "./loading.ts"
 import { createLaps, type Laps } from "./laps.ts"
 import { layerDown } from "./online/down.ts"
 import { createOnline, type Online, type OnlineServices } from "./online.ts"
@@ -129,7 +136,8 @@ const switchTrack = (id: string): void => {
 
 // ── the race ────────────────────────────────────────────────────────────
 
-const [stage] = await Promise.all([createStage(track, document.body), loadFont()])
+const backend = await chooseBackend()
+const [stage] = await Promise.all([createStage(track, document.body, { preference: backend }), loadFont()])
 const scene = createTrackScene(stage, track)
 const actors = createActors(stage, track)
 // One way to steer: the wheel. The simulation and a replay still know a second (pointing
@@ -184,7 +192,7 @@ const hud = createHud(
   },
   showLapAgain
 )
-createMadeWith(document, panelAlpha)
+createMadeWith(document, panelAlpha, backend)
 const replayLook = createReplayLook(document, stage.app.canvas)
 const audio = createAudio(loaded?.settings.muted ?? false)
 const input = createInput(window)
@@ -226,6 +234,7 @@ const rumbleFor = (event: RaceEvent): void => {
   else if (event.kind === "bollard") input.rumble(Math.min(1, 0.4 + event.impact / 12), 160, true)
   else if (event.kind === "door") input.rumble(Math.min(1, 0.3 + event.impact / 14), 200, false)
   else if (event.kind === "boost") input.rumble(0.45, 320, false)
+  else if (event.kind === "drift") input.rumble(0.25 + 0.3 * event.charge, 220, false)
   else if (event.kind === "reset" && event.reason === "off-track") input.rumble(0.8, 260, false)
 }
 
@@ -271,6 +280,8 @@ const step = (): void => {
 
 /** The time between drawn frames, measured here since the loop's own is clamped. */
 let lastFrame = performance.now()
+/** Frames drawn so far, up to the few after which the loading screen goes: the first ones compile the scene's shaders. */
+let framesDrawn = 0
 
 const loop = FixedLoop.start({
   source: BrowserTickSource.make(window),
@@ -319,6 +330,7 @@ const loop = FixedLoop.start({
     replayLook.show(replaying)
     audio.update(shown)
     stage.app.ticker.update(nowMs)
+    if (framesDrawn < 3 && ++framesDrawn === 3) finishLoading(document)
   },
   onFailure: (failure) => console.error("the race loop stopped", failure)
 })

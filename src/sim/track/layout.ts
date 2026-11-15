@@ -202,5 +202,5 @@ export const layoutTrack: TrackData = buildTrack({
     { kind: "jump", sFrom: plan.at("kicker"), sTo: plan.end("landing") },
     { kind: "doors", sFrom: doorsAt - 1, sTo: doorsAt + 1 }
   ],
-  medals: { bronze: 32500, silver: 28900, gold: 25900 }
+  medals: { bronze: 30000, silver: 26000, gold: 23000 }
 })

@@ -30,6 +30,9 @@
 }
 .tgp-made img { display: block; height: 15px; width: auto; margin-top: -2px; }
 .tgp-made .tgp-made-3d { color: var(--made-text); font-size: 13px; font-weight: 700; letter-spacing: 0.4px; margin-left: -2px; }
+/* The renderer in use, after a thin divider; WebGPU in the accent. */
+.tgp-made .tgp-made-backend { margin-left: 4px; padding-left: 9px; border-left: 1px solid rgba(255, 255, 255, 0.25); font-size: 10px; font-weight: 700; letter-spacing: 0.8px; }
+.tgp-made .tgp-made-webgpu { color: var(--made-accent); }
 .tgp-made:hover, .tgp-made:focus-visible {
   background: var(--made-back-lit);
   border-color: rgba(255, 255, 255, 0.4);

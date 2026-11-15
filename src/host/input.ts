@@ -10,7 +10,8 @@
  * not press an action for them.
  *
  * Up is throttle, down and space brake (and reverse from a stop), left and right turn the
- * wheel; on a gamepad the right trigger, the left trigger and the stick. Nothing on screen
+ * wheel; on a gamepad the right trigger, the left trigger and the stick. Throttle and brake
+ * held together in a turn are the drift (the simulation's rule, not a key of its own). Nothing on screen
  * explains this beyond the start prompt: the arrows are the game.
  */
 import { Controls, Gamepad, Keyboard } from "@typeonce/ritmo-browser"

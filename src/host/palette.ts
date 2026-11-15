@@ -84,6 +84,9 @@ export const palette = {
   smoke: 0xf2efe9,
   dust: 0xc4ab82,
   spark: 0xffc457,
+  /** A drift: the sparks and the HUD's bar while a slide earns its push, and once it has earned all of it. */
+  driftCharge: 0x6fb6ff,
+  driftFull: 0xff9a3d,
   skid: 0x1b1c1f,
   lampRed: 0xff3a2a,
   lampAmber: 0xffae22,

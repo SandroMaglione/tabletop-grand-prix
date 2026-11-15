@@ -66,6 +66,21 @@ export const BoostSchema = S.Union([
 ])
 export type Boost = typeof BoostSchema.Type
 
+/**
+ * How the tyres hold:
+ * - `grip`: as a car does.
+ * - `drift`: sliding round a corner to one `side` (1 left, -1 right) since step `since`; how
+ *   long it has been held is what the push at the end is paid by.
+ * - `spent`: a drift was cut short (a wall, too slow, a jump) with the brake still held. The
+ *   brake does nothing until it is let go, so the hand that held the slide does not stop the car.
+ */
+export const DriftSchema = S.Union([
+  S.Struct({ _tag: S.Literal("grip") }),
+  S.Struct({ _tag: S.Literal("drift"), side: S.Literals([-1, 1]), since: count }),
+  S.Struct({ _tag: S.Literal("spent") })
+])
+export type Drift = typeof DriftSchema.Type
+
 /** The car between ticks. */
 export const CarSchema = S.Struct({
   x: num,
@@ -93,7 +108,8 @@ export const CarSchema = S.Struct({
   /** The wall touched last tick: 1 left, -1 right, 0 none. Sends one `wall` event per contact. */
   wallSide: S.Literals([-1, 0, 1]),
   /** How hard the car has been turning lately: -1 (right) to 1 (left), as a share of the most it can. A held turn costs speed by it. */
-  load: num
+  load: num,
+  drift: DriftSchema
 })
 export type CarState = typeof CarSchema.Type
 

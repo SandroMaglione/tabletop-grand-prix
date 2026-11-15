@@ -47,7 +47,7 @@ const drive = params.get("drive") !== "0"
 /** What the world sees when nothing is driven: the car on the start line, nothing moving. */
 const still: RaceView = {
   tick: 0,
-  car: { ...track.start, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road" },
+  car: { ...track.start, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road", drift: null },
   lap: { phase: "ready", attempt: 1, timeMs: 0, splitsMs: [], nextCheckpoint: 1 },
   props: track.props.map((prop) => ({ x: prop.x, y: prop.y, z: prop.z, yaw: prop.yaw, vx: 0, vy: 0, vz: 0 })),
   doors: track.doors.map(() => 0)

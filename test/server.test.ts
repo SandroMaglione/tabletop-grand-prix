@@ -211,21 +211,22 @@ test("the rival is the slowest run still ahead, never the player's own", async (
   const me = await server.ok(register("Sandro"))
   const rival = (fasterThanMs: number | null, identity: Identity | null) => Effect.flatMap(lb, (service) => service.rival(track, fasterThanMs, identity))
   assert.equal(await server.ok(rival(null, null)), null, "an empty board has nobody to chase")
-  server.seed("Pro", 22_000)
-  server.seed("Club", 24_000)
+  // Mine is the kept lap, 21977: third on this board.
+  server.seed("Pro", 20_000)
+  server.seed("Club", 21_500)
   server.seed("Rookie", 30_000)
   await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
   assert.equal((await server.ok(rival(null, me)))?.name, "Rookie", "with no lap yet, the slowest run on the board")
   assert.equal((await server.ok(rival(25_000, me)))?.name, "Club")
   assert.deepEqual(
-    await server.ok(rival(24_000.5, me)).then((entry) => [entry?.name, entry?.rank, entry?.mine]),
+    await server.ok(rival(21_500.5, me)).then((entry) => [entry?.name, entry?.rank, entry?.mine]),
     ["Club", 2, false]
   )
-  assert.equal((await server.ok(rival(23_000, me)))?.name, "Pro")
-  assert.equal(await server.ok(rival(22_000, me)), null, "nobody is ahead of the fastest")
-  // Mine is 24725: it is never offered, even when it is the one just ahead.
-  assert.equal((await server.ok(rival(25_100, me)))?.name, "Club")
-  assert.equal((await server.ok(rival(25_100, null)))?.name, "Sandro")
+  assert.equal((await server.ok(rival(21_000, me)))?.name, "Pro")
+  assert.equal(await server.ok(rival(20_000, me)), null, "nobody is ahead of the fastest")
+  // Mine is never offered, even when it is the one just ahead.
+  assert.equal((await server.ok(rival(22_100, me)))?.name, "Club")
+  assert.equal((await server.ok(rival(22_100, null)))?.name, "Sandro")
 })
 
 test("unknown tracks and runs are not found", async () => {

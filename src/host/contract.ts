@@ -19,6 +19,8 @@ export interface Stage {
   readonly view: View3D
   /** Parent of everything in the scene. Add to this, never to `view.root` (it holds the camera). */
   readonly world: Container3D
+  /** For labs and scripts (the trailer): look at a point up close, or with null at the whole track again. */
+  focusOn(focus: { readonly x: number; readonly y?: number; readonly z: number; readonly zoom: number } | null): void
   /**
    * A direction on screen (x to the right, y down) as a direction on the ground, for
    * screen-relative steering. The result is normalized; (0, 0) gives (0, 0).

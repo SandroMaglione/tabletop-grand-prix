@@ -10,9 +10,74 @@
     <style>
       html, body { height: 100%; margin: 0; overflow: hidden; background: #e9e6df; }
       canvas { display: block; }
+
+      /*
+       * The loading screen: on screen from the first paint, before the game's script has even
+       * arrived, until the game has drawn its first frames (`src/host/loading.ts`). The dark
+       * hatched cover of the lap-end wipe, with the Typeonce lockup floating up and down on it.
+       * It is wider than the window by its slanted edge, and leaves to the left like the wipe.
+       */
+      #tgp-loading {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: calc(100vw + 40vh);
+        height: 100%;
+        z-index: 30;
+        background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.045) 0 10px, transparent 10px 28px), #141a2e;
+        clip-path: polygon(0 0, 100% 0, calc(100% - 40vh) 100%, 0 100%);
+        color: #f2f4fa;
+        font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 3px;
+        transition: transform 460ms cubic-bezier(0.7, 0, 0.75, 0.4);
+      }
+      #tgp-loading.tgp-loading-out { transform: translateX(-102%); }
+      #tgp-loading > div {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+      }
+      #tgp-loading svg { display: block; animation: tgp-float 1.7s ease-in-out infinite alternate; }
+      #tgp-loading p { margin: 0; height: 1em; color: #b9c1d3; }
+      @keyframes tgp-float {
+        from { transform: translateY(-10px); }
+        to { transform: translateY(10px); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #tgp-loading { transition: opacity 200ms ease; }
+        #tgp-loading.tgp-loading-out { transform: none; opacity: 0; }
+        #tgp-loading svg { animation: none; }
+      }
     </style>
   </head>
   <body>
+    <div id="tgp-loading" role="status" aria-label="Loading Tabletop Grand Prix">
+      <div>
+        <!--typeonce-lockup-->
+        <p id="tgp-loading-note"></p>
+      </div>
+    </div>
+    <script>
+      // A game that fails before its first frame says so, instead of floating there for good.
+      (() => {
+        const failed = () => {
+          const loading = document.getElementById("tgp-loading")
+          const note = document.getElementById("tgp-loading-note")
+          if (loading !== null && !loading.classList.contains("tgp-loading-out") && note !== null) note.textContent = "COULD NOT START · RELOAD TO TRY AGAIN"
+        }
+        window.addEventListener("error", failed)
+        window.addEventListener("unhandledrejection", failed)
+      })()
+    </script>
     <script type="module" src="/src/host/main.ts"></script>
   </body>
 </html>

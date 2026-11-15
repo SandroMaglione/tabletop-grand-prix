@@ -2,7 +2,7 @@
 
 Play it at https://tabletop-grand-prix.typeonce.games.
 
-A solo time-attack racer on one screen, made with [ritmo](https://ritmo.typeonce.dev) and PixiJS 3D.
+A solo time-attack racer on one screen, made with [ritmo](https://ritmo.typeonce.dev) and PixiJS 3D, on WebGPU where the browser has it and WebGL elsewhere (`?renderer=webgl` asks for WebGL).
 
 ```sh
 pnpm install

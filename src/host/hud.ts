@@ -12,7 +12,10 @@
  *   board), the ghost being raced, the sectors as tabs (the one being driven is lit, a
  *   finished one is edged green or red), the gap to the ghost at the last line crossed, and
  *   the next medal's time.
- * - bottom right: the speed, with a bar.
+ * - bottom right: the speed, with a bar, and under it the drift: its name, the two pedals
+ *   that make it (in the keys of the device in use), and a bar that fills as a slide earns
+ *   its push. It is always there, so the panel itself says the car can drift; nothing else
+ *   on screen explains it.
  * - bottom centre: short messages ("off the road", a changed setting) and the result when a
  *   lap is done, with the board's answer when it was sent.
  * - top centre: `REPLAY`, while the lap just driven is shown again.
@@ -253,7 +256,8 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
 
   // ── bottom right: speed ───────────────────────────────────────────────
   const speedW = 150
-  const speedH = 66
+  const driftRowH = 38
+  const speedH = 66 + driftRowH
   const speedPanel = new Container()
   const speedBg = new Graphics()
   speedPanel.addChild(speedBg)
@@ -265,10 +269,24 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
   unitText.anchor.set(1, 0.5)
   unitText.position.set(speedW - pad, 29)
   const speedBar = new Graphics()
-  speedBar.position.set(pad, speedH - 17)
+  speedBar.position.set(pad, 66 - 17)
   speedPanel.addChild(speedBar)
+  // The drift: a darker row under the speed, like the timing panel's rows.
+  speedBg.rect(rim, 62, speedW - rim * 2, driftRowH - rim - 1).fill({ color: palette.hudHead, alpha: 0.42 })
+  const driftName = text(speedPanel, "DRIFT", label(11, palette.hudDim))
+  driftName.anchor.set(0, 0.5)
+  driftName.position.set(pad, 74)
+  const driftKeys = text(speedPanel, "", number(11, palette.hudDim))
+  driftKeys.anchor.set(1, 0.5)
+  driftKeys.position.set(speedW - pad, 74)
+  const driftBar = new Graphics()
+  driftBar.position.set(pad, 86)
+  speedPanel.addChild(driftBar)
   root.addChild(speedPanel)
   let speedKey = ""
+  let driftKey = ""
+  /** Until when (`now`) the drift bar flashes for a push just paid. */
+  let driftPaidUntil = -1
 
   // ── bottom centre: messages ────────────────────────────────────────────
   const messageH = 40
@@ -307,6 +325,8 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
   result.visible = false
   root.addChild(result)
   let resultAttempt = -1
+  let resultWon: (typeof medalNames)[number] | null = null
+  let resultMedalKey = ""
 
   // ── top centre: the lap is being shown again ───────────────────────────
   // The panel is as wide as its dot and its word, with the same space at both ends.
@@ -556,17 +576,26 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
       resultGap.text = finish.improved ? `${time}  ${formatGap(gap)} NEW BEST` : `${time}  ${formatGap(gap)} TO BEST`
       resultBand.paint(finish.improved ? palette.hudGoodDeep : palette.hudBadDeep)
     }
-    const won = [...medalNames].reverse().find((name) => finish.timeMs <= track.medals[name])
+    resultWon = [...medalNames].reverse().find((name) => finish.timeMs <= track.medals[name]) ?? null
+    resultMedalKey = ""
+  }
+
+  /** The medal the lap earned and how to go again, named for the device in use: `R` on the keyboard, `Y` on a gamepad. */
+  const drawResultMedal = (onPad: boolean): void => {
+    const key = `${resultWon ?? "none"}:${onPad}`
+    if (key === resultMedalKey) return
+    resultMedalKey = key
+    const again = `${onPad ? "Y" : "R"} TO GO AGAIN`
     resultMedalDot.clear()
-    if (won === undefined) {
-      resultMedal.text = "NO MEDAL  ·  R TO GO AGAIN"
+    if (resultWon === null) {
+      resultMedal.text = `NO MEDAL  ·  ${again}`
       resultMedal.style.fill = palette.hudDim
       resultMedal.position.x = 0
     } else {
-      resultMedal.text = `${won.toUpperCase()}  ·  R TO GO AGAIN`
+      resultMedal.text = `${resultWon.toUpperCase()}  ·  ${again}`
       resultMedal.style.fill = palette.hudText
       resultMedal.position.x = 8
-      resultMedalDot.circle(0, 0, 5).fill(medalColour[won])
+      resultMedalDot.circle(0, 0, 5).fill(medalColour[resultWon])
       resultMedalDot.position.set(-resultMedal.width / 2, resultGapH + 18)
     }
   }
@@ -582,6 +611,9 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
         case "reset":
           if (event.reason === "off-track") offRoadUntil = now + 1.4
           plate.cancel()
+          break
+        case "drift":
+          driftPaidUntil = now + 0.45
           break
         case "finish":
           showResult(view)
@@ -656,6 +688,24 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
         if (filled > 1) speedBar.roundRect(0, 0, filled, 5, 2.5).fill({ color: state.car.boosting ? palette.boost : palette.hudAccent })
       }
 
+      // The drift: the pedals that make it, and the push a slide has earned so far.
+      const charge = state.car.drift
+      const paid = now < driftPaidUntil
+      const onPad = state.pad === "gamepad"
+      const nextDrift = `${charge === null ? "off" : Math.round(charge * 50)}:${paid}:${onPad}`
+      if (nextDrift !== driftKey) {
+        driftKey = nextDrift
+        const sliding = charge !== null
+        driftName.style.fill = sliding || paid ? palette.hudText : palette.hudDim
+        driftKeys.text = onPad ? "RT+LT" : "↑+↓"
+        driftKeys.style.fill = sliding ? palette.hudText : palette.hudDim
+        const barW = speedW - pad * 2
+        driftBar.clear()
+        driftBar.roundRect(0, 0, barW, 5, 2.5).fill({ color: palette.hudText, alpha: 0.16 })
+        if (paid) driftBar.roundRect(0, 0, barW, 5, 2.5).fill({ color: palette.hudText })
+        else if (sliding) driftBar.roundRect(0, 0, Math.max(5, barW * (charge ?? 0)), 5, 2.5).fill({ color: (charge ?? 0) >= 1 ? palette.driftFull : palette.driftCharge })
+      }
+
       // While the lap is shown again the timing panel is away, its plate with it.
       tower.visible = !state.replay
       plate.show(!state.replay)
@@ -667,7 +717,10 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
       // The result stays while the lap is finished, or a few seconds when the clock runs on.
       const showingResult = resultAttempt === lap.attempt && (lap.phase === "finished" || now < finishShownUntil)
       result.visible = showingResult
-      if (showingResult) drawResultBoard(lap.attempt)
+      if (showingResult) {
+        drawResultMedal(state.pad === "gamepad")
+        drawResultBoard(lap.attempt)
+      }
       if (showingResult) setMessage("")
       else if (now < toastUntil) setMessage(toastText)
       else if (now < offRoadUntil) setMessage("off the road")

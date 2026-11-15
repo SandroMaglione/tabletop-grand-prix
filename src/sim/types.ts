@@ -189,7 +189,7 @@ export interface TrackData {
 export interface DriveInput {
   /** 0 to 1. */
   readonly throttle: number
-  /** 0 to 1. Brakes, then reverses once the car has stopped. */
+  /** 0 to 1. Brakes, then reverses once the car has stopped. Held with the throttle in a turn it slides the car round instead (a drift), and with the throttle on a straight it only drags. */
   readonly brake: number
   /** -1 (right) to 1 (left). Used by the car-relative steering variant. */
   readonly steer: number
@@ -230,6 +230,8 @@ export interface CarView {
   readonly s: number
   /** What is under the car's centre: a patch's surface, or plain `road` (also while in the air). */
   readonly surface: SurfaceKind | "road"
+  /** While the car drifts: how much of the push at the end it has earned, 0 to 1. Null when it grips. */
+  readonly drift: number | null
 }
 
 export interface LapView {
@@ -290,6 +292,8 @@ export type RaceEvent =
   | { readonly kind: "knock"; readonly index: number; readonly prop: PropKind; readonly impact: number; readonly x: number; readonly y: number; readonly z: number }
   /** The car rolled onto a bump at `speed` m/s and was thrown up. A `land` follows when it comes down. */
   | { readonly kind: "bump"; readonly index: number; readonly speed: number; readonly x: number; readonly y: number; readonly z: number }
+  /** A drift ended with a push: `charge` is the share of the full one, 0 to 1. */
+  | { readonly kind: "drift"; readonly charge: number; readonly x: number; readonly y: number; readonly z: number }
   /** The car hit a bollard. */
   | { readonly kind: "bollard"; readonly index: number; readonly impact: number; readonly x: number; readonly y: number; readonly z: number }
   /** The car hit a door leaf. */

@@ -106,7 +106,7 @@ const labTrack = demo === "gallery" ? galleryTrack() : demo === "stress" ? stres
 const actors = createActors(stage, labTrack)
 
 // A made-up view the scripted demos write into.
-const car: Mutable<CarView> = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road" }
+const car: Mutable<CarView> = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road", drift: null }
 const lap: Mutable<LapView> = { phase: "running", attempt: 1, timeMs: 0, splitsMs: [], nextCheckpoint: 1 }
 const props: Array<Mutable<PropView>> = labTrack.props.map((p) => ({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, vx: 0, vy: 0, vz: 0 }))
 const doors: Array<number> = labTrack.doors.map(() => 0)

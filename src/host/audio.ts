@@ -264,6 +264,10 @@ export const createAudio = (startMuted: boolean): Audio => {
         case "boost":
           hiss("bandpass", 350, 2400, 2.5, 0.45, 0.32, 0, 0.12)
           break
+        case "drift":
+          // The push at the end of a drift: the pad's rush, shorter and by how much was earned.
+          hiss("bandpass", 300, 1800, 2.5, 0.3, 0.14 + 0.16 * event.charge, 0, 0.08)
+          break
         case "checkpoint": {
           // Higher when ahead of the best split, lower when behind, neutral with no best.
           const pitch = gapMs === null ? 660 : gapMs <= 0 ? 880 : 440

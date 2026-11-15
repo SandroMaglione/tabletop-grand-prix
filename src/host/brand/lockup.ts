@@ -42,6 +42,13 @@ export const lockupWidth = letterX - LETTER_GAP
 export const lockupHeight = MARK_SIZE
 const lockupPath = art(PIXEL_MARK_32, 0, 0) + letters
 
+/**
+ * The lockup as SVG markup `height` CSS pixels tall, for a page that has no script yet: the
+ * build writes it into `index.html`'s loading screen (`vite.config.ts`).
+ */
+export const lockupMarkup = (height: number): string =>
+  `<svg viewBox="0 0 ${lockupWidth} ${lockupHeight}" width="${(height * lockupWidth) / lockupHeight}" height="${height}" shape-rendering="crispEdges" aria-hidden="true"><path d="${lockupPath}" fill="currentColor"/></svg>`
+
 /** The lockup as an SVG element `height` CSS pixels tall. */
 export const createLockup = (host: Document, height: number): SVGSVGElement => {
   const svg = host.createElementNS("http://www.w3.org/2000/svg", "svg")

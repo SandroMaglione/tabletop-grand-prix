@@ -268,3 +268,80 @@ test("a rock in the road throws a fast car up and it lands a little slower; a sl
   assert.ok(slow.view().car.s > 20, "the slow car never got past the rock")
   assert.ok(!crawl.some((event) => event.kind === "bump"))
 })
+
+/**
+ * A race on the real track, driven by the bot to just inside the spiral (a long right-hander)
+ * and still gripping: the place to try a drift. The bot would start its own slide a little
+ * earlier, so the last metres are driven on its wheel with the brake up.
+ */
+const atTheSpiral = (): RaceSession => {
+  const session = createSession(track)
+  run(session, 40, (view) => botInput(view, track), (_, view) => view.car.s > 266 && view.car.s < 280)
+  run(session, 2, (view) => ({ ...botInput(view, track), throttle: 1, brake: 0 }), (_, view) => view.car.s > 274.5)
+  const { car } = session.view()
+  assert.ok(car.s > 274.5 && car.s < 280 && car.drift === null && car.speed > handling.driftFrom, "the bot never reached the spiral")
+  return session
+}
+
+/** How far to the side of the centreline the car is, metres. */
+const offsetOf = (view: RaceView): number => locateNear(track, view.car.x, view.car.z, indexAt(track, view.car.s)).d
+
+test("gas and brake together in a turn slide the car round it, in the road, and letting go pays a push", () => {
+  const session = atTheSpiral()
+  // Both pedals, the wheel into the turn to start, then let go: the slide's own arc is the spiral's.
+  let widest = 0
+  const sliding = run(session, 1.6, (view) => {
+    widest = Math.max(widest, Math.abs(offsetOf(view)))
+    return { ...idleInput, throttle: 1, brake: 1, steer: view.car.drift === null ? -1 : 0 }
+  })
+  const held = session.view()
+  assert.ok(held.car.drift === 1, `after 1.6 s the slide has earned ${held.car.drift}`)
+  assert.ok(widest < 2.4 && !sliding.some((event) => event.kind === "wall"), `the slide ran ${widest} m off the middle`)
+  assert.ok(held.car.speed > 15 && held.car.brake === 0, "the brake that holds the slide does not slow the car")
+  // The nose points inside the way the car goes.
+  const travel = Math.atan2(held.car.vx, held.car.vz)
+  let lead = held.car.yaw - travel
+  while (lead > Math.PI) lead -= 2 * Math.PI
+  while (lead < -Math.PI) lead += 2 * Math.PI
+  assert.ok(lead < -0.2, `the nose leads the way the car goes by ${lead} rad`)
+
+  const before = Math.hypot(held.car.vx, held.car.vz)
+  const after = run(session, 0.05, () => ({ ...idleInput, throttle: 1 }))
+  const push = after.find((event) => event.kind === "drift")
+  assert.ok(push?.kind === "drift" && push.charge === 1, "letting go of a long slide pays the whole push")
+  const now = session.view()
+  assert.ok(now.car.drift === null && now.car.boosting && Math.hypot(now.car.vx, now.car.vz) > before + handling.driftKick * 0.8)
+})
+
+test("a slide let go at once pays nothing, and a wall ends one without the held brake stopping the car", () => {
+  const brief = atTheSpiral()
+  run(brief, 0.2, () => ({ ...idleInput, throttle: 1, brake: 1, steer: -1 }))
+  assert.ok(brief.view().car.drift === 0)
+  const released = run(brief, 0.1, () => ({ ...idleInput, throttle: 1 }))
+  assert.ok(brief.view().car.drift === null && !released.some((event) => event.kind === "drift"))
+
+  // The wheel held away from the turn: the arc runs wide into the outside wall.
+  const wide = atTheSpiral()
+  const events = run(wide, 2, (view) => ({ ...idleInput, throttle: 1, brake: 1, steer: view.car.drift === null ? -1 : 1 }), (seen) => seen.some((event) => event.kind === "wall"))
+  assert.ok(events.some((event) => event.kind === "wall"), "the wide slide never reached the wall")
+  const hit = wide.view().car.speed
+  // On along the road with both pedals still down: the slide is over, and the brake does nothing until it is let go.
+  const on = run(wide, 0.6, (view) => ({ ...botInput(view, track), throttle: 1, brake: 1 }))
+  assert.ok(wide.view().car.drift === null && !on.some((event) => event.kind === "drift"), "a slide ended by a wall pays nothing")
+  // Coming off the wall costs a few m/s; the brake itself would have stopped the car by now.
+  assert.ok(wide.view().car.speed > hit - 6, `the brake still held slowed the car from ${hit} to ${wide.view().car.speed}`)
+})
+
+test("with the gas down the brake only drags; with the gas up it brakes hard", () => {
+  const slowing = (throttle: number): number => {
+    const session = createSession(fixtureTrack)
+    run(session, 1.5, (view) => botInput(view, fixtureTrack))
+    const from = session.view().car.speed
+    run(session, 0.3, (view) => ({ ...botInput(view, fixtureTrack), throttle, brake: 1, steer: 0 }))
+    return from - session.view().car.speed
+  }
+  const dragged = slowing(1)
+  const braked = slowing(0)
+  assert.ok(braked > 6, `the brake alone took ${braked} m/s off in 0.3 s`)
+  assert.ok(dragged < braked * 0.5, `with the gas down it took ${dragged} against ${braked}`)
+})

@@ -1,5 +1,6 @@
 /** What the session reads from the world: the race as plain data for the page, and this tick's events. */
 import { Ops } from "@typeonce/ritmo"
+import { driftCharge } from "./car.ts"
 import { Car, CourseService, Game, HandlingValues, Lap, Obstacles, Outbox, Time } from "./state.ts"
 import { speedLimit } from "./systems/boost.ts"
 import { msOf } from "./systems/lap.ts"
@@ -46,7 +47,8 @@ export const ReadView = Game.Inspector(
       grounded,
       boosting: speedLimit(car.boost, handling, time) > handling.topSpeed,
       s: car.s,
-      surface: (grounded ? surfaceAt(track, car.s, locateNear(track, car.x, car.z, car.hint).d) : null) ?? "road"
+      surface: (grounded ? surfaceAt(track, car.s, locateNear(track, car.x, car.z, car.hint).d) : null) ?? "road",
+      drift: car.drift._tag === "drift" ? driftCharge((now - car.drift.since) * time.dt, handling) : null
     }
     const ticks = lap._tag === "ready" ? 0 : now - lap.startStep
     const obstacles = resources.obstacles.get()
