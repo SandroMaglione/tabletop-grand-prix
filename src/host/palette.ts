@@ -96,12 +96,43 @@ export const palette = {
   hudBack: 0x141a2e,
   hudHead: 0x0b0f1f,
   hudText: 0xffffff,
-  hudDim: 0x9aa4bb,
+  hudDim: 0xb9c1d3,
   hudAccent: 0xf6d32d,
   /** Ahead of the best lap, and behind it. */
   hudGood: 0x4bdc8e,
   hudBad: 0xff6b78,
+  /** The same two as the colour of a whole band behind white text. */
+  hudGoodDeep: 0x1f9a56,
+  hudBadDeep: 0xd43a45,
   bronze: 0xd08a55,
   silver: 0xc3cad3,
-  gold: 0xf2c544
+  gold: 0xf2c544,
+  /** The meadow: dark turf and soil under the clumps, the shadow at its edge, blades from the root to the sun-bleached tip, seed heads, clippings. */
+  turf: 0x3f5a2b,
+  turfDark: 0x2f4521,
+  turfSoil: 0x4a3f2e,
+  grassShadow: 0x1f2a17,
+  bladeRoot: 0x223a18,
+  bladeMid: 0x527f33,
+  bladeTip: 0xa8bd5c,
+  seedHead: 0xd8cb93,
+  clipping: 0x86a24f,
+  /** The ford: the wet bed under the water, the water in the shallows and the middle, spray. */
+  fordBed: 0x2b2a27,
+  fordShallow: 0x84a5a3,
+  fordDeep: 0x44666b,
+  spray: 0xe9f1f0,
+  /** A tyre's wet track on the road after the ford: the film of water it leaves, which shows the sky. */
+  wetTrack: 0x9fc0c4,
+  /** The stony ground: packed dirt from dark to pale, gravel, stones half sunk in it, the rocks to bounce over (pale weathered tops, lichen), dust. */
+  dirt: 0x7d6347,
+  dirtDark: 0x4f3f2e,
+  dirtLight: 0xa08a68,
+  gravel: 0x8e877b,
+  pebble: 0xb3ada2,
+  rock: 0x9a958b,
+  rockDark: 0x6c675f,
+  rockLight: 0xc9c3b6,
+  lichen: 0xb5b26a,
+  stoneDust: 0xcbb999
 } as const

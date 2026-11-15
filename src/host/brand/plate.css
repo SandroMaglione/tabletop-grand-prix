@@ -1,0 +1,150 @@
+/*
+ * The Typeonce plate as the timing panel's header, and the wipe that covers the window with the
+ * brand after a lap: the maker's mark the way a race broadcast cuts to a replay. Drawn like the HUD's panels
+ * (`hud.ts`); the colours come from `palette.ts` as variables set by `plate.ts`.
+ */
+.tgp-plate {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 12px 0 13px;
+  /* The hatch of a timing screen's header, over the panel's darker shade. */
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.075) 0 4px, transparent 4px 11px),
+    var(--plate-back);
+  border-radius: 6px 6px 0 0;
+  color: var(--plate-text);
+  font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+.tgp-plate[hidden] { display: none; }
+/* The timing panel's header: laid over the canvas where the HUD says. */
+.tgp-plate.tgp-plate-pinned {
+  position: fixed;
+  left: 0;
+  top: 0;
+  transform-origin: top left;
+}
+/* Lit (the pointer over it, or the keyboard on it): a brighter
+   layer fades in over the hatch, since a gradient cannot ease from one to another. */
+.tgp-plate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 4px, transparent 4px 11px),
+    var(--plate-back-lit);
+  opacity: 0;
+  transition: opacity 220ms ease;
+  z-index: 0;
+}
+/* The accent bar on the left grows from the middle. */
+.tgp-plate::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--plate-accent);
+  transform: scaleY(0);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: 1;
+}
+.tgp-plate svg { position: relative; z-index: 1; flex: none; display: block; }
+.tgp-plate .tgp-plate-site {
+  position: relative;
+  z-index: 1;
+  margin-left: auto;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  color: var(--plate-dim);
+  white-space: nowrap;
+  transition: color 220ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tgp-plate .tgp-plate-arrow {
+  margin-left: 7px;
+  color: var(--plate-dim);
+  transition: color 220ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tgp-plate:hover, .tgp-plate:focus-visible { outline: none; }
+.tgp-plate:hover::after, .tgp-plate:focus-visible::after { opacity: 1; }
+.tgp-plate:hover::before, .tgp-plate:focus-visible::before { transform: scaleY(1); }
+.tgp-plate:hover .tgp-plate-site, .tgp-plate:focus-visible .tgp-plate-site { color: var(--plate-text); transform: translateX(-2px); }
+/* The arrow leaves the way it points. */
+.tgp-plate:hover .tgp-plate-arrow, .tgp-plate:focus-visible .tgp-plate-arrow { color: var(--plate-accent); transform: translate(2px, -2px); }
+@media (prefers-reduced-motion: reduce) {
+  .tgp-plate::after, .tgp-plate::before, .tgp-plate .tgp-plate-site, .tgp-plate .tgp-plate-arrow { transition: none; }
+}
+
+/*
+ * The wipe: slanted slabs that speed across the whole window, with the lockup on a band in
+ * the middle. The slabs are wider than the window by their slant, so a covered window shows
+ * no corner of the game.
+ */
+.tgp-wipe {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 20;
+}
+.tgp-wipe[hidden] { display: none; }
+.tgp-wipe-slab {
+  position: absolute;
+  top: -10vh;
+  height: 120vh;
+  left: -35vh;
+  right: -35vh;
+  will-change: transform;
+}
+.tgp-wipe-accent { background: var(--plate-accent); }
+.tgp-wipe-pale { background: var(--plate-text); }
+/* The one that covers: the HUD's dark, with the hatch of its headers. */
+.tgp-wipe-dark {
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.045) 0 10px, transparent 10px 28px),
+    var(--plate-cover);
+}
+.tgp-wipe-band {
+  position: absolute;
+  left: calc(50% - 310px);
+  top: calc(50% - 88px);
+  width: 620px;
+  height: 176px;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+/* The band's slanted body, and the bright leading edge of a broadcast graphic. */
+.tgp-wipe-band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: skewX(-16deg);
+  background: var(--plate-solid);
+  border-left: 10px solid var(--plate-accent);
+  border-radius: 4px;
+  box-shadow: 0 14px 50px rgba(0, 0, 0, 0.35);
+}
+.tgp-wipe-art {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--plate-text);
+  font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 6px;
+}
+.tgp-wipe-art span { color: var(--plate-dim); }

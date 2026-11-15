@@ -34,7 +34,7 @@ export const fakeDrivers: ReadonlyArray<FakeDriver> = [
   { name: "Vee", steering: "car", lift: 0.78, wobble: 0.45, seed: 19 },
   { name: "slowpoke_jo", steering: "car", lift: 0.85, wobble: 0.7, seed: 8 },
   { name: "Brakes On", steering: "car", lift: 0.95, wobble: 0.5, seed: 8 },
-  { name: "tumbleweed", steering: "car", lift: 0.95, wobble: 0.9, seed: 8 }
+  { name: "tumbleweed", steering: "car", lift: 0.95, wobble: 0.9, seed: 14 }
 ]
 
 /** One lap by `driver` on `entry`: its time and replay, or null when the driver went off the road. */

@@ -72,7 +72,7 @@ const shell = {
   wallHeight: WALL
 } as const
 
-const at = (s: number, d: number = 0) => pointAt({ ...shell, checkpoints: [], start: { x: 0, y: 0, z: 0, yaw: 0 }, boosts: [], props: [], bollards: [], doors: [], features: [], bounds: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, maxY: 0 }, medals: { bronze: 0, silver: 0, gold: 0 } }, s, d)
+const at = (s: number, d: number = 0) => pointAt({ ...shell, checkpoints: [], start: { x: 0, y: 0, z: 0, yaw: 0 }, boosts: [], props: [], bollards: [], doors: [], bumps: [], surfaces: [], features: [], bounds: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, maxY: 0 }, medals: { bronze: 0, silver: 0, gold: 0 } }, s, d)
 
 const CRATES_AT = 34
 const crate = { radius: 0.6, height: 1.1 }
@@ -102,6 +102,8 @@ export const fixtureTrack: TrackData = {
   props,
   bollards: [{ x: post.x, y: post.y, z: post.z, radius: 0.45, height: 1.3 }],
   doors,
+  bumps: [],
+  surfaces: [],
   features: [
     { kind: "crates", sFrom: CRATES_AT - 2, sTo: CRATES_AT + 2 },
     { kind: "boost", sFrom: BOOST_AT - 2, sTo: BOOST_AT + 2 },

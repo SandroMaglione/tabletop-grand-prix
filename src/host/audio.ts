@@ -5,7 +5,12 @@
  *   below, through a low-pass that opens with the throttle. Quiet and round, so it can
  *   run for a whole session.
  * - Tyre squeal from `car.slip`: band-passed noise that fades in past a threshold.
- * - A short sound for each event: thud, thump, crunch, whoosh, clank, blip, flourish, buzz.
+ * - The ground under the car (`car.surface`), each a loop of the shared noise that rises with
+ *   speed: a low wash in water (and a splash on driving in), a soft swish through the long
+ *   grass (a low band of noise surging with a slow wobble), a low rattle on the rough ground
+ *   (low noise chopped by a square wave that beats faster with speed). All of it stays low and soft.
+ * - A short sound for each event: thud, thump, crunch, whoosh, clank, blip, flourish, buzz; a
+ *   rock that throws the car is a dull knock and a scatter of grit.
  *
  * Browsers only start audio after the player does something, so nothing is built until
  * `unlock` (the first key press). Muting is a ramp on the master gain.
@@ -39,7 +44,16 @@ export const createAudio = (startMuted: boolean): Audio => {
     readonly gain: GainNode
     readonly squealFilter: BiquadFilterNode
     readonly squealGain: GainNode
+    readonly washFilter: BiquadFilterNode
+    readonly washGain: GainNode
+    readonly rustleGain: GainNode
+    readonly rattleBeat: OscillatorNode
+    readonly rattleGain: GainNode
   } | null = null
+  /** The ground under the car last frame, and where the car was, to hear driving into water. */
+  let lastSurface: RaceView["car"]["surface"] = "road"
+  let lastX = 0
+  let lastZ = 0
 
   const build = (): void => {
     const ctx = new AudioContext()
@@ -95,7 +109,57 @@ export const createAudio = (startMuted: boolean): Audio => {
     squealSource.connect(squealFilter).connect(squealGain).connect(master)
     squealSource.start()
 
-    engine = { saws, sub, filter, gain, squealFilter, squealGain }
+    /** A looping noise source from a different point in the buffer, for each ground loop. */
+    const loop = (offset: number): AudioBufferSourceNode => {
+      const source = ctx.createBufferSource()
+      source.buffer = noise
+      source.loop = true
+      source.start(0, offset)
+      return source
+    }
+    // Water: low, rounded noise.
+    const washFilter = ctx.createBiquadFilter()
+    washFilter.type = "lowpass"
+    washFilter.frequency.value = 500
+    washFilter.Q.value = 0.7
+    const washGain = ctx.createGain()
+    washGain.gain.value = 0
+    loop(0.3).connect(washFilter).connect(washGain).connect(master)
+    // Grass: a low, soft band of noise, surging with a slow sine, as long blades swish past.
+    const rustleFilter = ctx.createBiquadFilter()
+    rustleFilter.type = "bandpass"
+    rustleFilter.frequency.value = 620
+    rustleFilter.Q.value = 0.7
+    const rustleFlutter = ctx.createGain()
+    rustleFlutter.gain.value = 0.6
+    const flutter = ctx.createOscillator()
+    flutter.frequency.value = 3.2
+    const flutterDepth = ctx.createGain()
+    flutterDepth.gain.value = 0.4
+    flutter.connect(flutterDepth).connect(rustleFlutter.gain)
+    flutter.start()
+    const rustleGain = ctx.createGain()
+    rustleGain.gain.value = 0
+    loop(0.9).connect(rustleFilter).connect(rustleFlutter).connect(rustleGain).connect(master)
+    // Stones: low noise chopped by a square wave, so it knocks rather than hisses.
+    const rattleFilter = ctx.createBiquadFilter()
+    rattleFilter.type = "lowpass"
+    rattleFilter.frequency.value = 280
+    rattleFilter.Q.value = 1.4
+    const rattleChop = ctx.createGain()
+    rattleChop.gain.value = 0.5
+    const rattleBeat = ctx.createOscillator()
+    rattleBeat.type = "square"
+    rattleBeat.frequency.value = 10
+    const beatDepth = ctx.createGain()
+    beatDepth.gain.value = 0.5
+    rattleBeat.connect(beatDepth).connect(rattleChop.gain)
+    rattleBeat.start()
+    const rattleGain = ctx.createGain()
+    rattleGain.gain.value = 0
+    loop(1.4).connect(rattleFilter).connect(rattleChop).connect(rattleGain).connect(master)
+
+    engine = { saws, sub, filter, gain, squealFilter, squealGain, washFilter, washGain, rustleGain, rattleBeat, rattleGain }
   }
 
   /** A tone that glides from `from` to `to` Hz and fades out over `seconds`. */
@@ -144,7 +208,7 @@ export const createAudio = (startMuted: boolean): Audio => {
       if (context === null) build()
       else if (context.state === "suspended") void context.resume()
     },
-    handle(event, _view, gapMs) {
+    handle(event, view, gapMs) {
       if (context === null) return
       switch (event.kind) {
         case "wall": {
@@ -181,6 +245,14 @@ export const createAudio = (startMuted: boolean): Audio => {
           const hit = 0.4 + 0.6 * clamp01(event.impact / 12)
           tone("sine", 92, 48, 0.2, 0.55 * hit)
           hiss("lowpass", 700, 200, 0.8, 0.12, 0.35 * hit)
+          break
+        }
+        case "bump": {
+          // A tyre striking a rock: a dull, low knock, then grit pattering down.
+          const hit = 0.35 + 0.65 * clamp01((event.speed - 6) / 18)
+          tone("sine", 68, 34, 0.28, 0.55 * hit)
+          hiss("lowpass", 420, 120, 1, 0.2, 0.42 * hit)
+          hiss("bandpass", 520, 300, 1.2, 0.28, 0.1 * hit, 0.06)
           break
         }
         case "door": {
@@ -228,6 +300,25 @@ export const createAudio = (startMuted: boolean): Audio => {
       const squeal = car.grounded ? clamp01((car.slip - 0.25) / 0.6) * clamp01(speed / 8) : 0
       engine.squealGain.gain.setTargetAtTime(squeal * 0.12, now, 0.05)
       engine.squealFilter.frequency.setTargetAtTime(1150 + squeal * 400, now, 0.1)
+
+      // The ground: each loop rises with speed while the car is on it, and fades when it leaves.
+      const moving = clamp01(speed / 4)
+      const surface = car.grounded ? car.surface : "road"
+      engine.washGain.gain.setTargetAtTime(surface === "water" ? 0.05 + 0.2 * pace * moving : 0, now, surface === "water" ? 0.05 : 0.25)
+      engine.washFilter.frequency.setTargetAtTime(380 + pace * 520, now, 0.1)
+      engine.rustleGain.gain.setTargetAtTime(surface === "grass" ? 0.11 * moving * (0.4 + pace) : 0, now, 0.12)
+      engine.rattleGain.gain.setTargetAtTime(surface === "stones" ? 0.22 * moving * (0.5 + pace) : 0, now, 0.08)
+      engine.rattleBeat.frequency.setTargetAtTime(7 + pace * 16, now, 0.1)
+      // Driving into the water (not landing there from a jump in place): a splash and a low plop.
+      const jumped = Math.hypot(car.x - lastX, car.z - lastZ) > Math.max(4, speed * 0.3 + 1)
+      if (surface === "water" && lastSurface !== "water" && !jumped) {
+        const hit = 0.4 + 0.6 * clamp01(speed / 20)
+        hiss("lowpass", 1300, 240, 0.8, 0.5, 0.42 * hit)
+        tone("sine", 120, 52, 0.22, 0.32 * hit)
+      }
+      lastSurface = surface
+      lastX = car.x
+      lastZ = car.z
     },
     setMuted(muted) {
       isMuted = muted

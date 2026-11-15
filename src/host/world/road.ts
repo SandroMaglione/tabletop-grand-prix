@@ -6,11 +6,14 @@
  * - the end face wherever a run of cut road stops: a ramp's cliff, a landing's first face,
  *   a bridge abutment, the far wall of a channel;
  * - bridge decks with parapets, and pillars that keep off the road below;
- * - painted lines, the start/finish band, checkpoint lines and kerbs, in their own mesh.
+ * - painted lines, the start/finish band, checkpoint lines and kerbs, in their own mesh. No
+ *   paint or kerb is laid where grass or stones cover the road (with room for their frayed
+ *   edges); paint stays under the ford's water.
  */
 import { pointAt, type TrackData } from "../../sim/index.ts"
 import { palette } from "../palette.ts"
 import { type MeshBuilder, mix, noise2, rgb, type Rgb, scale, type Vec3 } from "./builder.ts"
+import { patchDepth } from "./patches.ts"
 import { BRIDGE_DEPTH, BRIDGE_PARAPET, EMBANKMENT_SLOPE, type Field, type Section, WALL_BAND } from "./field.ts"
 import { earthAt, grassAt } from "./terrain.ts"
 
@@ -368,6 +371,9 @@ const buildPaint = (field: Field, track: TrackData, paint: MeshBuilder): void =>
     const i = wrap(Math.floor(s / spacing), count)
     return kinds[i] !== "gap"
   }
+  /** Grass or stones lie over this point, or close enough for their frayed edge to reach it. */
+  const overgrown = track.surfaces.filter((patch) => patch.kind !== "water")
+  const bare = (s: number, d: number): boolean => !overgrown.some((patch) => patchDepth(track, patch, s, d) > -1.8)
 
   /** Half width at any distance, eased between samples the way the asphalt's edges are. */
   const hwAt = (s: number): number => {
@@ -431,6 +437,7 @@ const buildPaint = (field: Field, track: TrackData, paint: MeshBuilder): void =>
     const side = grown[i]!
     if (side === 0) continue
     const s0 = i * spacing
+    if (!bare(s0 + spacing / 2, side * (hwAt(s0) - KERB_WIDTH / 2))) continue
     const block = Math.floor(s0 / KERB_BLOCK)
     const colour = block % 2 === 0 ? KERB_RED : KERB_WHITE
     if (side === 1) strip(s0, s0 + spacing, (s) => hwAt(s) - KERB_WIDTH, hwAt, colour, KERB_LIFT)
@@ -442,13 +449,15 @@ const buildPaint = (field: Field, track: TrackData, paint: MeshBuilder): void =>
     if (kinds[i] === "gap") continue
     const s0 = i * spacing
     const side = grown[i]!
-    if (side !== 1) strip(s0, s0 + spacing, (s) => hwAt(s) - EDGE_LINE_INSET - LINE_WIDTH, (s) => hwAt(s) - EDGE_LINE_INSET, LINE, PAINT_LIFT)
-    if (side !== -1) strip(s0, s0 + spacing, (s) => -hwAt(s) + EDGE_LINE_INSET, (s) => -hwAt(s) + EDGE_LINE_INSET + LINE_WIDTH, LINE, PAINT_LIFT)
+    const hw = hwAt(s0 + spacing / 2) - EDGE_LINE_INSET
+    if (side !== 1 && bare(s0 + spacing / 2, hw)) strip(s0, s0 + spacing, (s) => hwAt(s) - EDGE_LINE_INSET - LINE_WIDTH, (s) => hwAt(s) - EDGE_LINE_INSET, LINE, PAINT_LIFT)
+    if (side !== -1 && bare(s0 + spacing / 2, -hw)) strip(s0, s0 + spacing, (s) => -hwAt(s) + EDGE_LINE_INSET, (s) => -hwAt(s) + EDGE_LINE_INSET + LINE_WIDTH, LINE, PAINT_LIFT)
   }
   // Dashes stop short of the sector lines rather than run across their checks.
   const nearLine = (s0: number, s1: number): boolean => track.checkpoints.slice(1).some((line) => line > s0 - 0.6 && line < s1 + 0.6)
   for (let s = 4; s + DASH < track.length - 4; s += DASH + DASH_GAP) {
     if (!surfaceAt(s) || !surfaceAt(s + DASH) || nearLine(s, s + DASH)) continue
+    if (!bare(s, 0) || !bare(s + DASH / 2, 0) || !bare(s + DASH, 0)) continue
     strip(s, s + DASH, -LINE_WIDTH / 2, LINE_WIDTH / 2, LINE, PAINT_LIFT)
   }
 

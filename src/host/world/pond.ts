@@ -95,7 +95,7 @@ export const withPond = (field: Field, pond: Pond | null): Field => {
  * Ripples: a few slow waves of different lengths and directions, summed as slopes and
  * bent into the normal. Their crests drift with time, so the glint shimmers gently.
  */
-const rippleBit: ShaderBit = {
+export const rippleBit: ShaderBit = {
   name: "flyingLapRipples",
   bindings: { material: { ripple: "vec4<f32>" } },
   gpu: {

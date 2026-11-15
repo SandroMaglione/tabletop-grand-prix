@@ -4,9 +4,9 @@
  */
 export type * from "./types.ts"
 export { idleInput } from "./types.ts"
-export { angleDelta, fixtureTrack, indexAt, locateBelow, locateNear, pointAt, track, trackById, tracks } from "./track/index.ts"
+export { angleDelta, fixtureTrack, indexAt, locateBelow, locateNear, pointAt, surfaceAt, track, trackById, tracks } from "./track/index.ts"
 export type { TrackEntry, TrackHit } from "./track/index.ts"
-export { createRecorder, decodeReplay, ghostEveryTicks, ghostStride, maxReplayTicks, quantise, replayFromText, replayToText, runReplay } from "./replay.ts"
+export { createRecorder, decodeReplay, unpack, ghostEveryTicks, ghostStride, maxReplayTicks, quantise, replayFromText, replayToText, runReplay } from "./replay.ts"
 export type { Recorder, Replay, ReplayFault, ReplayRun, Steering } from "./replay.ts"
 export { rulesVersion } from "./version.ts"
 export { createSession } from "./session.ts"

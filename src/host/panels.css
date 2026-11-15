@@ -6,7 +6,8 @@
   position: fixed;
   top: 12px;
   right: 12px;
-  width: 272px;
+  /* Wide enough for the longest name (16 letters) beside a time and a gap. */
+  width: 376px;
   transform-origin: top right;
   display: flex;
   flex-direction: column;
@@ -14,9 +15,9 @@
   gap: 8px;
   pointer-events: none;
   color: var(--hud-text);
-  font-family: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
@@ -27,8 +28,9 @@
   width: 100%;
   box-sizing: border-box;
   background: var(--hud-back-a);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
+  /* The pale glassy rim of a timing screen. */
+  border: 3px solid rgba(255, 255, 255, 0.24);
+  border-radius: 9px;
   overflow: hidden;
 }
 
@@ -36,10 +38,14 @@
   position: relative;
   display: flex;
   align-items: center;
-  height: 24px;
-  padding: 0 6px 0 19px;
-  background: var(--hud-head-a);
-  font-size: 12px;
+  height: 32px;
+  padding: 0 8px 0 21px;
+  /* The hatch of a timing screen's header. */
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.075) 0 4px, transparent 4px 11px),
+    var(--hud-head-a);
+  font-size: 13px;
+  font-weight: 700;
 }
 .tgp-head::before {
   content: "";
@@ -50,6 +56,11 @@
   width: 3px;
   background: var(--hud-accent);
 }
+/* Under the Typeonce plate the board's own header is plain: one hatched row is enough. */
+.tgp-head.tgp-head-plain { background: var(--hud-head-a); }
+/* The maker's plate as the board's first row, with room round it like a sponsor's board. */
+.tgp-panel .tgp-plate { height: 56px; padding: 0 18px 0 19px; }
+.tgp-panel .tgp-plate .tgp-plate-site { font-size: 13px; }
 .tgp-head .tgp-title { flex: 1; }
 .tgp-head .tgp-count { color: var(--hud-dim); font-size: 11px; margin-right: 4px; }
 
@@ -72,48 +83,68 @@
 .tgp-bad { color: var(--hud-bad); }
 .tgp-accent { color: var(--hud-accent); }
 
-/* The board's rows. */
-.tgp-rows { padding: 2px 0 4px; }
-.tgp-row {
-  position: relative;
+/* The board as a table: column names, then each run as its own bar. The player's bar is lit. */
+.tgp-cols, .tgp-row {
   display: grid;
-  grid-template-columns: 26px 1fr auto 14px;
+  grid-template-columns: 30px 1fr 68px 58px 10px;
   align-items: center;
   column-gap: 8px;
-  height: 22px;
-  padding: 0 6px 0 10px;
+}
+.tgp-cols { padding: 9px 10px 5px 6px; font-size: 10px; font-weight: 700; color: var(--hud-dim); }
+.tgp-cols span:nth-child(1) { text-align: center; }
+.tgp-cols span:nth-child(3), .tgp-cols span:nth-child(4) { text-align: right; }
+.tgp-rows { padding: 0 6px 6px; display: flex; flex-direction: column; gap: 2px; }
+.tgp-row {
+  position: relative;
+  height: 28px;
+  padding: 0 4px 0 0;
   font-size: 12px;
   cursor: pointer;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  overflow: hidden;
 }
-.tgp-row:first-child { border-top: 0; }
-.tgp-row:hover { background: rgba(255, 255, 255, 0.07); }
-.tgp-row .tgp-rank { text-align: right; font-size: 11px; color: var(--hud-dim); }
-.tgp-row .tgp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--hud-dim); }
-.tgp-row .tgp-time { font-size: 12px; }
-.tgp-row.tgp-mine .tgp-name { color: var(--hud-text); }
-.tgp-row.tgp-mine::before {
-  content: "";
+.tgp-row:hover { background: rgba(255, 255, 255, 0.16); }
+/* The place, in its own darker column. */
+.tgp-row .tgp-rank { align-self: stretch; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.32); font-size: 12px; color: var(--hud-text); }
+.tgp-row .tgp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tgp-row .tgp-time, .tgp-row .tgp-behind { text-align: right; font-size: 12px; }
+.tgp-row .tgp-behind { color: var(--hud-dim); font-size: 11px; }
+.tgp-row.tgp-mine { background: rgba(255, 255, 255, 0.95); color: var(--hud-back); }
+/* The player's row on its way up the board: over the others, lit green, with the places it gained. */
+.tgp-row.tgp-climbed { z-index: 2; animation: tgp-climb 3.2s ease-out both; }
+@keyframes tgp-climb {
+  0%, 45% { background: var(--hud-good); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
+  100% { background: rgba(255, 255, 255, 0.95); box-shadow: none; }
+}
+.tgp-row .tgp-gained {
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--hud-accent);
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 7px 2px;
+  border-radius: 4px;
+  background: var(--hud-back);
+  color: var(--hud-good);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
 }
+.tgp-row.tgp-mine:hover { background: #ffffff; }
+.tgp-row.tgp-mine .tgp-rank { background: rgba(0, 0, 0, 0.1); color: var(--hud-back); }
+.tgp-row.tgp-mine .tgp-behind { color: var(--hud-back); opacity: 0.6; }
 .tgp-row .tgp-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
 .tgp-row.tgp-raced .tgp-dot { background: var(--ghost); }
-.tgp-row.tgp-raced .tgp-name { color: var(--hud-text); }
-.tgp-gap { height: 10px; display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 10px; letter-spacing: 3px; }
-.tgp-empty { padding: 10px; font-size: 12px; color: var(--hud-dim); text-align: center; }
+.tgp-gap { height: 8px; display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 10px; letter-spacing: 3px; }
+.tgp-empty { padding: 14px 10px; font-size: 12px; color: var(--hud-dim); text-align: center; }
 
 /* A line of the panel: label and controls. */
 .tgp-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
-  padding: 0 8px 0 10px;
+  min-height: 36px;
+  padding: 0 10px 0 12px;
   font-size: 11px;
   border-top: 1px solid rgba(255, 255, 255, 0.09);
 }
@@ -122,15 +153,15 @@
 
 /* Chips: the ghost to race, the tracks. The chosen one is lit like the sector being driven. */
 .tgp-chip, .tgp-button {
-  height: 19px;
-  padding: 0 7px;
+  height: 23px;
+  padding: 0 8px;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.1);
   color: var(--hud-text);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -146,7 +177,7 @@
   color: var(--hud-accent);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   cursor: pointer;
 }
 .tgp-link:hover { text-decoration: underline; }
@@ -156,16 +187,16 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
-  padding: 0 10px;
+  height: 38px;
+  padding: 0 12px;
   box-sizing: border-box;
   background: var(--hud-back-a);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
+  border: 3px solid rgba(255, 255, 255, 0.24);
+  border-radius: 9px;
   color: var(--hud-dim);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   cursor: pointer;
   transition: opacity 0.2s;
 }
@@ -189,12 +220,12 @@
 .tgp-faded { opacity: 0; pointer-events: none; }
 
 /* The name. */
-.tgp-form { padding: 10px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
+.tgp-form { padding: 14px 12px 14px; display: flex; flex-direction: column; gap: 10px; }
 .tgp-form .tgp-hint { font-size: 11px; color: var(--hud-dim); }
 .tgp-input {
-  height: 30px;
+  height: 36px;
   box-sizing: border-box;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.25);
@@ -206,4 +237,6 @@
 .tgp-input:focus { border-color: var(--hud-accent); }
 .tgp-status { min-height: 14px; font-size: 11px; color: var(--hud-dim); }
 .tgp-actions { display: flex; gap: 6px; justify-content: flex-end; }
-.tgp-actions .tgp-button { height: 22px; padding: 0 10px; }
+.tgp-actions .tgp-button { height: 27px; padding: 0 12px; }
+/* A made-up name sits apart from the answer to the one typed. */
+.tgp-actions .tgp-random { margin-right: auto; }

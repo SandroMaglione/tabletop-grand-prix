@@ -74,7 +74,7 @@ For stage `<s>` (`staging`, `prod`):
 - Worker `tabletop-grand-prix-api-<s>`: the API, on `https://tabletop-grand-prix-api-<s>.lass-maglio.workers.dev`.
   It has a D1 binding, six rate limit bindings (namespaces 7200–7205 for staging, 7100–7105 for prod),
   the `ADMIN_SECRET` secret, and its own URL.
-- Worker `tabletop-grand-prix-<s>`: the site, assets only, on `https://tabletop-grand-prix-<s>.lass-maglio.workers.dev`.
+- Worker `tabletop-grand-prix-<s>`: the site, assets only, on `https://tabletop-grand-prix-<s>.lass-maglio.workers.dev`. In `prod` it is also on the game's own address, https://tabletop-grand-prix.typeonce.games (`productionDomain` in `src/server/stage.ts`); the other stages stay on workers.dev.
 - D1 database `Leaderboard` (Alchemy names it), primary in Western Europe (`weur`).
 
 Workers Logs, invocation logs, traces and Logpush are off on both Workers. State goes to the
@@ -107,7 +107,7 @@ own statuses: `NameRefused` 422, `NameTaken` 409, `Unauthorised` 401, `RunRefuse
 
 CORS allows the stage's site, http://localhost:5380 and http://127.0.0.1:5380. Under `alchemy dev`
 it allows any localhost port. The API works out the site's origin from its own workers.dev URL, since
-the two only differ in the Worker name. A custom domain would need its origin added in `worker.ts`.
+the two only differ in the Worker name. The site's own domain in `prod` is allowed as well (`domainOriginFor`).
 
 ## Boards
 

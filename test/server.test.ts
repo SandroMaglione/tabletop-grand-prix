@@ -223,9 +223,9 @@ test("the rival is the slowest run still ahead, never the player's own", async (
   )
   assert.equal((await server.ok(rival(23_000, me)))?.name, "Pro")
   assert.equal(await server.ok(rival(22_000, me)), null, "nobody is ahead of the fastest")
-  // Mine is 24467: it is never offered, even when it is the one just ahead.
-  assert.equal((await server.ok(rival(24_500, me)))?.name, "Club")
-  assert.equal((await server.ok(rival(24_500, null)))?.name, "Sandro")
+  // Mine is 24725: it is never offered, even when it is the one just ahead.
+  assert.equal((await server.ok(rival(25_100, me)))?.name, "Club")
+  assert.equal((await server.ok(rival(25_100, null)))?.name, "Sandro")
 })
 
 test("unknown tracks and runs are not found", async () => {

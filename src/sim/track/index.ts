@@ -8,7 +8,7 @@ import { layoutTrack } from "./layout.ts"
 import type { TrackData } from "../types.ts"
 
 export { fixtureTrack } from "./fixture.ts"
-export { angleDelta, indexAt, locateBelow, locateNear, pointAt } from "./query.ts"
+export { angleDelta, indexAt, locateBelow, locateNear, pointAt, surfaceAt } from "./query.ts"
 export type { TrackHit } from "./query.ts"
 
 /** A track the game offers. `id` never changes once runs are kept under it: saves and the leaderboard are filed by it. */

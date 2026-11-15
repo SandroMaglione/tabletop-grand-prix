@@ -14,7 +14,7 @@ import { serverLayer } from "./api.ts"
 import { sqlFromD1 } from "./d1.ts"
 import { makeLeaderboard } from "./leaderboard.ts"
 import { type Action, type Limiter, limits, type Scope } from "./limits.ts"
-import { apiWorkerName, isLocalOrigin, localOrigins, rateLimitBase, siteOriginFor } from "./stage.ts"
+import { apiWorkerName, domainOriginFor, isLocalOrigin, localOrigins, rateLimitBase, siteOriginFor } from "./stage.ts"
 
 export const Database = Cloudflare.D1.Database("Leaderboard", { migrations: "./migrations", primaryLocationHint: "weur" })
 
@@ -70,7 +70,8 @@ export default class Api extends Cloudflare.Worker<Api>()(
     /** Filled on the first request, when the Worker's own URL can be read. */
     let siteOrigin: string | null = null
     let local = false
-    const allowedOrigin = (origin: string) => localOrigins.includes(origin) || origin === siteOrigin || (local && isLocalOrigin(origin))
+    const domainOrigin = domainOriginFor(stage)
+    const allowedOrigin = (origin: string) => localOrigins.includes(origin) || origin === siteOrigin || origin === domainOrigin || (local && isLocalOrigin(origin))
 
     const handler = yield* HttpRouter.toHttpEffect(
       serverLayer({ leaderboard: makeLeaderboard(sqlFromD1(db.raw)), limiter, adminSecret, allowedOrigins: allowedOrigin })

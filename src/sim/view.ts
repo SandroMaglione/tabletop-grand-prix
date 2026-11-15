@@ -3,6 +3,7 @@ import { Ops } from "@typeonce/ritmo"
 import { Car, CourseService, Game, HandlingValues, Lap, Obstacles, Outbox, Time } from "./state.ts"
 import { speedLimit } from "./systems/boost.ts"
 import { msOf } from "./systems/lap.ts"
+import { locateNear, surfaceAt } from "./track/query.ts"
 import type { CarView, RaceView } from "./types.ts"
 
 export const ReadView = Game.Inspector(
@@ -25,6 +26,8 @@ export const ReadView = Game.Inspector(
     const handling = resources.handling.get()
     const fx = Ops.sin(car.yaw)
     const fz = Ops.cos(car.yaw)
+    const { track } = services.course
+    const grounded = car.motion._tag === "road"
     const carView: CarView = {
       x: car.x,
       y: car.y,
@@ -40,12 +43,12 @@ export const ReadView = Game.Inspector(
       slip: car.slip,
       throttle: car.throttle,
       brake: car.brake,
-      grounded: car.motion._tag === "road",
+      grounded,
       boosting: speedLimit(car.boost, handling, time) > handling.topSpeed,
-      s: car.s
+      s: car.s,
+      surface: (grounded ? surfaceAt(track, car.s, locateNear(track, car.x, car.z, car.hint).d) : null) ?? "road"
     }
     const ticks = lap._tag === "ready" ? 0 : now - lap.startStep
-    const { track } = services.course
     const obstacles = resources.obstacles.get()
     return {
       tick: now,

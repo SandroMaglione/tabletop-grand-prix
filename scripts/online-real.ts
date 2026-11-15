@@ -1,6 +1,6 @@
 /**
- * One player's first visit on a deployed site, against the real server: drive a lap, pick
- * a name, post the lap, read the board.
+ * One player's first visit on a deployed site, against the real server: drive a lap, get a
+ * made-up name with it, see the board beside the replay, change the name.
  *
  *   node scripts/online-real.ts <site url> [name] [out.png]
  *
@@ -55,7 +55,16 @@ await page.waitForFunction(() => (window as any).__race.session.view().lap.phase
 const timeMs = await page.evaluate(() => (window as any).__race.session.view().lap.timeMs as number)
 check(timeMs === kept.timeMs, `the lap driven in the page is the kept lap (${timeMs} ms)`)
 
-// The name panel opens by itself after the first finish.
+// The device is given a made-up name and the lap goes to the board under it; the board
+// opens beside the replay once the wipe has covered the window.
+await page.waitForFunction(() => (window as any).__race.online.state().post?.state.kind === "sent", undefined, { timeout: 20000 }).catch(() => {})
+const given = await page.evaluate(() => ((window as any).__race.online.state().identity?.name as string | undefined) ?? "")
+check(given.split(" ").length === 3, `the device is given a made-up name (${given})`)
+await page.locator(".tgp-rows").waitFor({ state: "visible", timeout: 10000 })
+check(await page.evaluate(() => (window as any).__race.rerun.active() as boolean), "the lap is shown again behind the board")
+
+// The name is the player's to change, from the board.
+await page.locator(".tgp-link").click()
 const field = page.locator(".tgp-input")
 await field.waitFor({ state: "visible", timeout: 10000 })
 await field.fill(name)
@@ -63,12 +72,10 @@ const status = page.locator(".tgp-status")
 await page.waitForFunction(() => document.querySelector(".tgp-status")?.classList.contains("tgp-good") === true, undefined, { timeout: 15000 }).catch(() => {})
 check((await status.getAttribute("class"))?.includes("tgp-good") === true, `the server says "${name}" is free ("${await status.textContent()}")`)
 await page.locator(".tgp-primary").click()
-await page.waitForTimeout(6000)
-await page.keyboard.press("l")
-await page.waitForTimeout(2500)
+await page.waitForTimeout(5000)
 const rows = await page.locator(".tgp-row").allTextContents()
 const mine = rows.find((row) => row.toUpperCase().includes(name.toUpperCase()))
-check(mine !== undefined, `the board shows the new player (${mine ?? "not found"})`)
+check(mine !== undefined, `the board shows the player under the new name (${mine ?? "not found"})`)
 console.log(rows.map((row) => `     ${row}`).join("\n"))
 await page.screenshot({ path: out })
 console.log(`     ${out}`)

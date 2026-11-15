@@ -1,6 +1,8 @@
 /**
  * Everything that moves: the car, the ghost, the props on the road and what happens when they
- * are hit, bollards, swing doors, boost pads, particles, skid marks and the under-bridge ring.
+ * are hit, bollards, swing doors, boost pads, particles, skid marks and the under-bridge ring,
+ * and what the car does to the ford, the meadow and the stony ground (`surfaces.ts`), where a
+ * rock that throws the car (`bump`) knocks up dust, grit and chips and kicks the nose up.
  *
  * Reads `RaceView` once a frame and each `RaceEvent` as it comes; never touches the simulation.
  * Everything is built up front and pooled, so the per-frame path allocates almost nothing (the
@@ -23,6 +25,7 @@ import { random, rotate, vec } from "./pose.ts"
 import { createProps } from "./props.ts"
 import { puffTexture } from "./shapes.ts"
 import { createSkids } from "./skids.ts"
+import { createSurfaceFx } from "./surfaces.ts"
 
 /** How a hit on each kind of thing feels: a cone is a tick, a ball a thud, a bollard a crack. */
 interface Feel {
@@ -37,17 +40,19 @@ interface Feel {
   readonly sparks: number
   /** How bright the hit light blinks per unit of strength. */
   readonly light: number
+  /** How big the hit's flash is: 1 for paint and metal, less for dull stone. */
+  readonly flash: number
   /** Impact, m/s, that counts as full strength. */
   readonly full: number
 }
 
 const FEEL: Record<PropKind | "bollard" | "door", Feel> = {
-  cone: { knock: 0.12, dust: 2, dustColor: palette.dust, chips: 0, chipColor: palette.cone, chipColor2: palette.cone, chipSize: 0.06, sparks: 0, light: 0.15, full: 12 },
-  crate: { knock: 0.6, dust: 6, dustColor: palette.dust, chips: 7, chipColor: palette.crateDark, chipColor2: palette.crate, chipSize: 0.11, sparks: 0, light: 0.5, full: 12 },
-  barrel: { knock: 0.65, dust: 3, dustColor: palette.dust, chips: 2, chipColor: palette.barrelHoop, chipColor2: palette.barrel, chipSize: 0.07, sparks: 5, light: 0.6, full: 12 },
-  ball: { knock: 1.15, dust: 10, dustColor: palette.dust, chips: 0, chipColor: palette.ballA, chipColor2: palette.ballB, chipSize: 0.06, sparks: 0, light: 0.55, full: 10 },
-  bollard: { knock: 1.05, dust: 4, dustColor: palette.concrete, chips: 7, chipColor: palette.concreteDark, chipColor2: palette.hazardYellow, chipSize: 0.08, sparks: 4, light: 0.8, full: 12 },
-  door: { knock: 0.5, dust: 3, dustColor: palette.dust, chips: 5, chipColor: palette.doorRed, chipColor2: palette.doorWhite, chipSize: 0.07, sparks: 0, light: 0.45, full: 12 }
+  cone: { knock: 0.12, dust: 2, dustColor: palette.dust, chips: 0, chipColor: palette.cone, chipColor2: palette.cone, chipSize: 0.06, sparks: 0, light: 0.15, flash: 1, full: 12 },
+  crate: { knock: 0.6, dust: 6, dustColor: palette.dust, chips: 7, chipColor: palette.crateDark, chipColor2: palette.crate, chipSize: 0.11, sparks: 0, light: 0.5, flash: 1, full: 12 },
+  barrel: { knock: 0.65, dust: 3, dustColor: palette.dust, chips: 2, chipColor: palette.barrelHoop, chipColor2: palette.barrel, chipSize: 0.07, sparks: 5, light: 0.6, flash: 1, full: 12 },
+  ball: { knock: 1.15, dust: 10, dustColor: palette.dust, chips: 0, chipColor: palette.ballA, chipColor2: palette.ballB, chipSize: 0.06, sparks: 0, light: 0.55, flash: 1, full: 10 },
+  bollard: { knock: 1.05, dust: 4, dustColor: palette.concrete, chips: 7, chipColor: palette.concreteDark, chipColor2: palette.hazardYellow, chipSize: 0.08, sparks: 4, light: 0.8, flash: 1, full: 12 },
+  door: { knock: 0.5, dust: 3, dustColor: palette.dust, chips: 5, chipColor: palette.doorRed, chipColor2: palette.doorWhite, chipSize: 0.07, sparks: 0, light: 0.45, flash: 1, full: 12 }
 }
 
 export const createActors = (stage: Stage, track: TrackData): Actors => {
@@ -66,6 +71,7 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
   const rand = random(11)
   const fx = createFx(particles, spawn, rand)
   const { flash, groundBurst, sparks } = fx
+  const surfaces = createSurfaceFx(layer, track, car, particles, spawn, rand)
 
   // A short flame out of the back while boosting: an unlit cone that flickers, plus glow particles.
   const flameMaterial = new Material3D({ baseColor: palette.flame, alphaMode: "blend", alpha: 0.75, emissive: { color: palette.boost, strength: 1.5 } })
@@ -111,7 +117,7 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
     }
     const sparkCount = Math.round(feel.sparks * strength * scale)
     if (sparkCount > 0) sparks(x, y + 0.4, z, sparkCount, c.vx * 0.4, c.vz * 0.4)
-    flash(x, y + 0.5, z, (0.35 + strength * 0.7) * scale, palette.spark)
+    flash(x, y + 0.5, z, (0.35 + strength * 0.7) * scale * feel.flash, palette.spark)
     if (feel.light * strength * scale > 0.08) hitLights.blink(x, y, z, feel.light * strength * scale)
     if (byCar) {
       // Left of the car is (cos yaw, -sin yaw): a hit on the left rolls the body to the right.
@@ -120,6 +126,24 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
       car.knock(side * feel.knock * (0.25 + strength))
       if (feel === FEEL.ball) car.land(impact * 0.35)
     }
+  }
+
+  /**
+   * The car thrown off a rock at (x, y, z): a dull knock where the tyre struck (a low cloud of
+   * dust, grit and stone chips thrown on ahead, a small dim flash), and the nose kicks up.
+   */
+  const rockKnock = (x: number, y: number, z: number, speed: number, view: RaceView): void => {
+    const strength = Math.min(1, Math.max(0, (speed - 6) / 18))
+    const c = view.car
+    const moving = Math.hypot(c.vx, c.vz)
+    const dx = moving > 0.5 ? c.vx / moving : 0
+    const dz = moving > 0.5 ? c.vz / moving : 0
+    groundBurst(x + dx * 0.4, y, z + dz * 0.4, Math.round(14 + strength * 16), 1.8 + strength * 2.8, 0.55 + strength * 0.35, palette.stoneDust, 0.55 + strength * 0.25)
+    fx.chips(x, y + 0.25, z, Math.round(5 + strength * 6), dx, dz, 3 + strength * 5, 0.18, palette.rockLight)
+    fx.chips(x, y + 0.2, z, Math.round(6 + strength * 8), dx, dz, 2.5 + strength * 4, 0.11, palette.dirtDark)
+    fx.chips(x, y + 0.2, z, Math.round(4 + strength * 5), dx, dz, 2 + strength * 4, 0.14, palette.rock)
+    flash(x, y + 0.35, z, 0.35 + strength * 0.35, palette.stoneDust)
+    car.hop(strength)
   }
 
   /** Everything back where it stood: props, bollards, doors, lights. */
@@ -134,6 +158,7 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
   const popIn = (view: RaceView): void => {
     car.popIn()
     skids.cut()
+    surfaces.cut()
     restore()
     groundBurst(view.car.x, view.car.y, view.car.z, 10, 1.6, 0.5, palette.smoke, 0.5)
   }
@@ -201,6 +226,9 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
           bollards.hit(event.index, event.impact, view.car.x, view.car.z)
           strike(FEEL.bollard, event.impact, event.x, event.y, event.z, view, true)
           break
+        case "bump":
+          rockKnock(event.x, event.y, event.z, event.speed, view)
+          break
         case "door":
           doors.hit(event.index, event.impact, view.car.vx, view.car.vz)
           strike(FEEL.door, event.impact, event.x, event.y, event.z, view, true)
@@ -226,6 +254,7 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
       car.update(c, dt)
       ghost.update(ghostPose, dt)
       skids.update(c)
+      surfaces.update(view, dt)
 
       // Pulling away: the rear wheels spin and throw dust and grit back until the car is moving.
       const launch = c.grounded && c.throttle > 0.5 && c.speed >= 0 && c.speed < 13 ? (1 - c.speed / 13) * c.throttle : 0

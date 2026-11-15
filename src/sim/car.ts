@@ -6,7 +6,7 @@
  * system makes each tick and writes back once. No state lives in this module.
  */
 import { Ops } from "@typeonce/ritmo"
-import { angleDelta, locateBelow, locateNear } from "./track/query.ts"
+import { angleDelta, locateBelow, locateNear, surfaceAt } from "./track/query.ts"
 import type { TrackHit } from "./track/query.ts"
 import type { CarState, Steering } from "./schema.ts"
 import type { RaceEvent, TrackData } from "./types.ts"
@@ -168,7 +168,11 @@ const driveOnRoad = (car: CarWork, throttle: number, brake: number, context: Dri
   let fz = Ops.cos(car.yaw)
   const forward = car.vx * fx + car.vz * fz
   const side = car.vx * fz - car.vz * fx
-  const speed = nextForwardSpeed(forward, throttle, brake, slopes.forward, context)
+  // Grass and water hold the car back by a share of its speed, so a faster car pays more.
+  const ground = surfaceAt(track, here.s, here.d)
+  const hold = ground === "grass" ? handling.grassDrag : ground === "water" ? handling.waterDrag : 0
+  const driven = nextForwardSpeed(forward, throttle, brake, slopes.forward, context)
+  const speed = driven - driven * hold * dt
 
   // Turn: a tight radius when slow, a cap on sideways acceleration when fast. A bank that
   // leans into the turn raises the cap.
@@ -207,6 +211,8 @@ const driveOnRoad = (car: CarWork, throttle: number, brake: number, context: Dri
   car.slip = clamp((Math.abs(gripped) - handling.slipFrom) / handling.slipRange, 0, 1)
 
   // Move, then find the road again.
+  const fromX = car.x
+  const fromZ = car.z
   car.x += car.vx * dt
   car.z += car.vz * dt
   const hit = locateNear(track, car.x, car.z, here.index)
@@ -242,7 +248,33 @@ const driveOnRoad = (car: CarWork, throttle: number, brake: number, context: Dri
   const tilt = tiltOf(car.yaw, hit)
   car.pitch = tilt.pitch
   car.roll = tilt.roll
+  throwOffBump(car, fromX, fromZ, hit.s, context)
   return "ok"
+}
+
+/**
+ * A rock in the road: when the car rolls onto one this tick (it was outside the rock's circle
+ * and is now inside) fast enough, it is thrown up and flies until it comes down. The knock
+ * costs a little speed. Rolling onto it slowly, or standing on it, does nothing.
+ */
+const throwOffBump = (car: CarWork, fromX: number, fromZ: number, s: number, context: DriveContext): void => {
+  const { handling, track } = context
+  for (let index = 0; index < track.bumps.length; index++) {
+    const bump = track.bumps[index]
+    if (bump === undefined || Math.abs(bump.y - car.y) > 1) continue
+    const reach = bump.radius * bump.radius
+    const now = (car.x - bump.x) * (car.x - bump.x) + (car.z - bump.z) * (car.z - bump.z)
+    if (now > reach || (fromX - bump.x) * (fromX - bump.x) + (fromZ - bump.z) * (fromZ - bump.z) <= reach) continue
+    const speed = Math.sqrt(car.vx * car.vx + car.vz * car.vz)
+    if (speed < handling.bumpFrom) continue
+    car.vx *= 1 - handling.bumpLoss
+    car.vz *= 1 - handling.bumpLoss
+    car.vy += Math.min(handling.bumpKickMax, handling.bumpKick * speed)
+    car.motion = { _tag: "air", leftAt: s }
+    car.wallSide = 0
+    context.emit({ kind: "bump", index, speed, x: bump.x, y: bump.y, z: bump.z })
+    return
+  }
 }
 
 /**

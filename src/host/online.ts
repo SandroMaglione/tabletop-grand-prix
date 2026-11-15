@@ -9,6 +9,11 @@
  * device has. With no server at all (`enabled` false) it asks nothing, and the ghost is the
  * device's own best, as before there was a leaderboard.
  *
+ * A player never has to type a name: on the first finished lap the device is registered under
+ * a made-up one (`handles.ts`), and the lap goes to the board under it. The player can change
+ * it from the board whenever they like. A player who closed the name panel without a name
+ * (before names were made up) chose to stay off the board, and is left there.
+ *
  * A best lap is first put in the outbox, then sent; it leaves the outbox only once the
  * server has answered for it. The outbox is sent again after every finish and on every visit.
  */
@@ -17,6 +22,7 @@ import { type Board, type Entry, type Identity, Leaderboard, type LeaderboardSha
 import { tidyName } from "../api/names.ts"
 import { Bests, type GhostChoice, Outbox, Rivals, type SavedRival } from "./boards.ts"
 import { ghostFromReplay, type Ghost, type LapGhost } from "./ghost.ts"
+import { makeHandle } from "./handles.ts"
 import type { FinishResult, Laps } from "./laps.ts"
 import { Profile } from "./profile.ts"
 
@@ -60,7 +66,7 @@ export interface OnlineState {
   readonly choice: GhostChoice
   /** A ghost is being fetched or driven. */
   readonly ghostLoading: boolean
-  /** Counts the times the page should offer the player a name (the first finish; a name the server no longer knows). */
+  /** Counts the times the page should offer the player a name (a name the server no longer knows). */
   readonly namePrompts: number
 }
 
@@ -90,8 +96,10 @@ export interface OnlineOptions {
   readonly laps: Laps
   readonly ghost: Ghost
   readonly identity: Identity | null
-  /** The player has been offered a name before. */
+  /** The player has a name or chose to have none: none is made up for them. */
   readonly asked: boolean
+  /** Makes up a name for a new player. `makeHandle` unless a test wants to know it. */
+  readonly handle?: () => string
   readonly rival: SavedRival
   /** Every track id, to send what waits on each. */
   readonly tracks: ReadonlyArray<string>
@@ -141,6 +149,8 @@ export const createOnline = (options: OnlineOptions): Online => {
   let rivalRun: RunReplay | null = options.rival.run
   let ghostLoading = false
   let namePrompts = 0
+  /** A made-up name is being registered: the lap waits for that, not for the player. */
+  let naming = false
   /** Ghosts already driven, by run id (and "own:<time>" for the player's own), so going back to one costs nothing. */
   const driven = new Map<string, LapGhost>()
   /** Drops answers to an older choice. */
@@ -305,7 +315,8 @@ export const createOnline = (options: OnlineOptions): Online => {
         changed()
       }
       const who = identity
-      if (who === null) return show({ kind: "unlisted" })
+      // While a name is being made up the lap is on its way; it is sent as soon as the name is.
+      if (who === null) return naming ? undefined : show({ kind: "unlisted" })
       show({ kind: "sending" })
       const got = await run(ask(timeoutMs, (lb) => lb.submit(who, waiting.replay)))
       if (got === undefined) return show({ kind: "waiting" })
@@ -355,6 +366,29 @@ export const createOnline = (options: OnlineOptions): Online => {
     void sendAll(laps.lastFinish()?.attempt ?? null).then(afterSend)
   }
 
+  /**
+   * Registers a new player under a made-up name, drawing again when one is taken. When the
+   * server cannot be reached nothing is kept: the next finish tries again.
+   */
+  const giveName = async (): Promise<void> => {
+    if (naming || identity !== null) return
+    naming = true
+    let given: Identity | null = null
+    for (let tries = 0; tries < 5 && given === null; tries++) {
+      const handle = (options.handle ?? makeHandle)()
+      const got = await run(ask(timeoutMs, (lb) => lb.register(handle)))
+      if (got === undefined) break
+      reached(got)
+      if (Result.isSuccess(got)) given = got.success
+      else if (got.failure._tag !== "NameTaken" && got.failure._tag !== "NameRefused") break
+    }
+    naming = false
+    // The player may have typed a name of their own meanwhile: theirs stands.
+    if (identity !== null) return
+    if (given !== null) named(given)
+    else void sendAll(laps.lastFinish()?.attempt ?? null)
+  }
+
   const saveName = async (name: string): Promise<NameAnswer> => {
     if (!enabled) return { kind: "unavailable" }
     const tidy = tidyName(name)
@@ -391,6 +425,8 @@ export const createOnline = (options: OnlineOptions): Online => {
       if (!enabled) return
       refreshBoard()
       resolveGhost()
+      // A lap driven while the server could not be reached still wants a name.
+      if (identity === null && !asked && laps.best() !== null) void giveName()
       void sendAll(null).then(() => {
         if (submitted !== null) afterSend()
       })
@@ -407,14 +443,10 @@ export const createOnline = (options: OnlineOptions): Online => {
         }
       }
       if (!enabled) return
-      if (identity === null && !asked) {
-        asked = true
-        namePrompts++
-        void run(Profile.use((profile) => profile.markAsked))
-      }
+      if (identity === null && !asked) void giveName()
       const put = result.improved && best !== null ? run(Outbox.use((outbox) => outbox.put(track, rules, { version: 1, replay: best.replay, timeMs: best.timeMs }))) : Promise.resolve()
       if (result.improved) {
-        post = { attempt: result.attempt, state: identity === null ? { kind: "unlisted" } : { kind: "sending" } }
+        post = { attempt: result.attempt, state: identity === null && !naming ? { kind: "unlisted" } : { kind: "sending" } }
         changed()
       }
       void put

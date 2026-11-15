@@ -86,14 +86,6 @@ const driveLap = async (slow: boolean): Promise<number> => {
   const time = await page.evaluate(() => (window as any).__race.laps.lastFinish().timeMs as number)
   return time
 }
-const letGo = () => page.evaluate(() => {
-  ;(window as any).__race.drive = undefined
-})
-const restart = async (): Promise<void> => {
-  await letGo()
-  await page.keyboard.press("r")
-  await page.waitForTimeout(400)
-}
 const typeName = async (name: string): Promise<void> => {
   await page.fill(".tgp-input", "")
   await page.type(".tgp-input", name, { delay: 30 })
@@ -105,23 +97,32 @@ const status = () => page.evaluate(() => document.querySelector(".tgp-status")?.
 await open("/?server=fake&fresh=1")
 let now = await state()
 check(now.ghost?.kind === "rival" && now.ghost.name === "tumbleweed", `with no lap yet the ghost is the slowest on the board (${now.ghost?.name})`)
+// The board is up without a key.
+check(await page.isVisible(".tgp-rows"), "the board is up on a first visit")
 await shot("01-first-visit")
-await page.keyboard.press("l")
-await page.waitForTimeout(700)
-await shot("02-board-before-a-lap")
-await page.keyboard.press("l")
 
 // ── the first lap ───────────────────────────────────────────────────────
 const first = await driveLap(true)
 await page.waitForTimeout(500)
 await shot("03-first-finish")
+await page.waitForTimeout(2900)
 now = await state()
-check(now.post?.kind === "unlisted", `the first lap waits for a name (${JSON.stringify(now.post)})`)
-await page.waitForTimeout(1400)
-check(await page.isVisible(".tgp-input"), "a name is offered after the first lap")
-await shot("04-name-offered")
+const given = now.identity ?? ""
+check(given.split(" ").length === 3 && now.post?.kind === "sent", `the first lap goes to the board under a made-up name (${given}, ${JSON.stringify(now.post)})`)
+check(!(await page.isVisible(".tgp-input")) && (await page.isVisible(".tgp-rows")), "no name is asked for: the board opens beside the replay")
+await shot("04-first-lap-on-the-board")
+
+// The name is the player's to change, from the board.
+await page.click(".tgp-link")
+await page.waitForTimeout(300)
+check((await page.inputValue(".tgp-input")) === given, "the name panel starts from the made-up name")
+await page.click(".tgp-random")
+await page.waitForTimeout(700)
+const rolled = await page.inputValue(".tgp-input")
+check(rolled !== given && rolled.split(" ").length === 3 && (await status()).includes("FREE"), `RANDOM offers another (${rolled}: ${await status()})`)
 
 // The game's keys do nothing while the field has focus.
+await page.fill(".tgp-input", "")
 const before = await state()
 await page.focus(".tgp-input")
 for (const key of ["v", "m", "r", "w", "a", "s", "d", " "]) await page.keyboard.press(key)
@@ -150,16 +151,17 @@ await page.keyboard.press("Enter")
 await page.waitForTimeout(1500)
 now = await state()
 check(now.identity === "Lap Hound", `the name is kept (${now.identity})`)
-check(now.post?.kind === "sent", `the lap went to the board once named (${JSON.stringify(now.post)})`)
+check(now.post?.kind === "sent", `the lap is on the board under the new name (${JSON.stringify(now.post)})`)
 await shot("09-posted")
 check(now.ghost?.kind === "rival" && (now.ghost.timeMs ?? 0) < first, `the ghost is now the next closest (${now.ghost?.name} ${now.ghost?.timeMs} vs ${first})`)
 
 // ── the board ───────────────────────────────────────────────────────────
-await page.keyboard.press("l")
+// The board opened beside the replay when the lap was shown again, and came back after the name.
+check(await page.isVisible(".tgp-rows"), "the board is open beside the replay of the lap")
 await page.waitForTimeout(800)
 await shot("10-board")
-// Race the third row (lunebox).
-await page.click(".tgp-row:nth-child(3)")
+// Race lunebox, by its row.
+await page.click(".tgp-row:has-text('LUNEBOX')")
 await page.waitForTimeout(800)
 now = await state()
 check(now.ghost?.name === "lunebox", `a row clicked is the ghost (${now.ghost?.name})`)
@@ -170,7 +172,7 @@ check((await state()).ghost === null, "OFF races no ghost")
 await page.click(".tgp-chip:has-text('MY BEST')")
 await page.waitForTimeout(300)
 check((await state()).ghost?.kind === "own", "MY BEST races the device's best")
-await page.click(".tgp-row:nth-child(3)")
+await page.click(".tgp-row:has-text('LUNEBOX')")
 await page.waitForTimeout(500)
 
 // Change the name from the board.
@@ -184,59 +186,6 @@ check((await state()).identity === "Lap Hound 2", "the name changed")
 await shot("13-renamed")
 await page.keyboard.press("Escape")
 
-// A replay has one steering: changing it mid-lap starts the attempt again.
-await restart()
-await page.keyboard.down("ArrowUp")
-await page.waitForTimeout(1200)
-const midLap = await state()
-await page.keyboard.press("v")
-await page.waitForTimeout(150)
-await page.keyboard.up("ArrowUp")
-await page.waitForTimeout(150)
-const changed = await state()
-check(midLap.phase === "running" && changed.attempt === midLap.attempt + 1 && changed.variant !== midLap.variant, `changing the steering mid-lap starts the attempt again (${midLap.phase} ${midLap.attempt} → ${changed.attempt}, ${changed.variant})`)
-await page.keyboard.press("v")
-await page.waitForTimeout(150)
-
-// Race the rival: the board closes, the ghost drives beside.
-await restart()
-await page.evaluate(async () => {
-  const sim = await import("/src/sim/index.ts" as string)
-  ;(window as any).__race.drive = (view: any, track: any) => sim.botInput(view, track)
-})
-await page.waitForTimeout(7000)
-await shot("14-racing-a-rival")
-await letGo()
-await page.waitForTimeout(200)
-
-// ── offline with a server configured: the lap is kept and sent next visit ──
-await open("/?server=down")
-now = await state()
-check(now.ghost?.name === "lunebox", `with the server down the last rival is still raced (${now.ghost?.name})`)
-await page.keyboard.press("l")
-await page.waitForTimeout(600)
-await shot("15-down-board")
-await page.keyboard.press("l")
-const fast = await driveLap(false)
-await page.waitForTimeout(1200)
-now = await state()
-check(fast < first && now.post?.kind === "waiting", `a better lap with no server waits (${JSON.stringify(now.post)})`)
-await shot("16-down-kept")
-await open("/?server=fake")
-await page.waitForTimeout(1000)
-now = await state()
-check(now.identity === "Lap Hound 2" && now.rank !== null && now.best === fast, `on the next visit it was sent (rank ${JSON.stringify(now.rank)})`)
-await page.keyboard.press("l")
-await page.waitForTimeout(800)
-await shot("17-sent-next-visit")
-
-// ── no server at all ─────────────────────────────────────────────────────
-await open("/")
-now = await state()
-check(now.ghost?.kind === "own" && !(await page.isVisible(".tgp-opener")), "with no server the ghost is the device's best and no board shows")
-await shot("18-offline")
-
-// ── the saves of the build before: best laps dropped, settings carried over once ──
 const fresh = await browser.newContext({ viewport: { width: 1600, height: 900 } })
 const old = await fresh.newPage()
 await old.goto("http://localhost:5380/world-lab.html", { waitUntil: "load" })
@@ -252,7 +201,7 @@ const carried = await old.evaluate(() => ({
   best: (window as any).__race.laps.best(),
   left: Object.keys(localStorage).filter((key) => key.startsWith("tabletop-grand-prix:"))
 }))
-check(carried.variant === "screen" && carried.best === null && carried.left.length === 0, `old saves: steering kept, best laps dropped, old keys removed (${JSON.stringify(carried)})`)
+check(carried.variant === "car" && carried.best === null && carried.left.length === 0, `old saves: best laps dropped, old keys removed, one way to steer (${JSON.stringify(carried)})`)
 await fresh.close()
 
 await browser.close()

@@ -12,7 +12,10 @@
  * state the simulation just reached, and anything else on Pixi's ticker still runs.
  *
  * Every input goes through `quantise` before the session, and to the lap recorder after it
- * (`laps.ts`), so a finished lap is a replay. What the page keeps (settings, name, best lap,
+ * (`laps.ts`), so a finished lap is a replay. After the finish the brand wipes across the
+ * window and behind it the page cuts to that replay, driven again in a second session
+ * (`rerun.ts`): the actors, the scene and the engine sound follow it, the board opens beside
+ * it, and the live car waits out of sight until the player starts again. What the page keeps (settings, name, best lap,
  * rival, runs waiting to be sent) is on Effect services over one store (`storage.ts`); the
  * leaderboard is the `Leaderboard` service, chosen here:
  * - `?server=fake`: the stand-in in the page (`online/fake.ts`), `?server=down` one that never answers;
@@ -24,19 +27,22 @@ import { BrowserTickSource, BrowserVisibility } from "@typeonce/ritmo-browser"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import type { Leaderboard } from "../api/contract.ts"
 import { layerHttp } from "../api/http.ts"
-import { createSession, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
+import { createSession, idleInput, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
 import { createActors } from "./actors/index.ts"
 import { createAudio } from "./audio.ts"
 import { Bests, boardsLayer, Rivals } from "./boards.ts"
 import type { Stage } from "./contract.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
-import { createHud, hudFont, hudLabelFont, steeringName } from "./hud.ts"
+import { createMadeWith } from "./brand/made-with.ts"
+import { createHud, hudFont, hudLabelFont, panelAlpha } from "./hud.ts"
 import { createInput } from "./input.ts"
 import { createLaps, type Laps } from "./laps.ts"
 import { layerDown } from "./online/down.ts"
 import { createOnline, type Online, type OnlineServices } from "./online.ts"
 import { createPanels } from "./panels.ts"
 import { Profile, layer as profileLayer } from "./profile.ts"
+import { createReplayLook } from "./replay-look.ts"
+import { createRerun, type Rerun } from "./rerun.ts"
 import { Settings, layer as settingsLayer } from "./settings.ts"
 import { createStage } from "./stage.ts"
 import { storageLayer, takeLegacySettings } from "./storage.ts"
@@ -51,6 +57,7 @@ declare global {
       readonly ghost?: Ghost
       readonly laps?: Laps
       readonly online?: Online
+      readonly rerun?: Rerun
       /** When set, drives the car instead of the keyboard and the gamepad (`scripts/drive.ts`). */
       drive?: (view: RaceView, track: TrackData) => DriveInput
     }
@@ -95,20 +102,13 @@ const run = <A>(effect: Effect.Effect<A, never, AppServices>): Promise<A | undef
     return undefined
   })
 
-const isSteering = (name: string | null): name is Steering => name === "car" || name === "screen"
-
 const loaded = await run(
   Effect.gen(function*() {
     const settings = yield* Settings
     // The build before this one kept two settings in localStorage: carried over once, then dropped.
     const legacy = takeLegacySettings()
     let saved = yield* settings.saved
-    if (settings.fresh && (legacy.steering !== null || legacy.muted !== null)) {
-      saved = yield* settings.change({
-        steering: legacy.steering === "screen" ? "screen" : "car",
-        muted: legacy.muted ?? false
-      })
-    }
+    if (settings.fresh && legacy.muted !== null) saved = yield* settings.change({ muted: legacy.muted })
     const profile = yield* (yield* Profile).saved
     const entry = trackById(params.get("track") ?? saved.track) ?? tracks[0] ?? { id: "spindle-leap", name: firstTrack.name, data: firstTrack }
     const best = yield* Bests.use((bests) => bests.get(entry.id, rulesVersion))
@@ -132,11 +132,10 @@ const switchTrack = (id: string): void => {
 const [stage] = await Promise.all([createStage(track, document.body), loadFont()])
 const scene = createTrackScene(stage, track)
 const actors = createActors(stage, track)
-const session = createSession(track, loaded?.settings.steering ?? "car")
-const steering = (): Steering => {
-  const name = session.variant()
-  return isSteering(name) ? name : "car"
-}
+// One way to steer: the wheel. The simulation and a replay still know a second (pointing
+// where to go), which the game no longer offers.
+const session = createSession(track, "car")
+const steering = (): Steering => "car"
 
 const laps = createLaps(entry.id, loaded?.best ?? null, steering)
 const ghost = createGhost()
@@ -152,18 +151,41 @@ const online = createOnline({
   rival: loaded?.rival ?? { version: 1, choice: { kind: "next" }, run: null },
   tracks: tracks.map((one) => one.id)
 })
-window.__race = { session, stage, ghost, laps, online }
+const rerun = createRerun(track)
+window.__race = { session, stage, ghost, laps, online, rerun }
 
-const hud = createHud(stage, track, {
-  best: () => laps.best(),
-  ghost: () => ghost.current(),
-  ghostLoading: () => online.state().ghostLoading,
-  lastFinish: () => laps.lastFinish(),
-  rank: () => online.state().rank,
-  post: () => online.state().post,
-  online: () => online.state().enabled
+const panels = createPanels({
+  online,
+  tracks,
+  track: entry.id,
+  switchTrack,
+  shown: loaded?.settings.board ?? true,
+  keep: (board) => void run(Settings.use((settings) => settings.change({ board })))
 })
-const panels = createPanels({ online, tracks, track: entry.id, switchTrack })
+/** The wipe covers the window: cut to the lap just driven, and open the board beside it. */
+const showLapAgain = (): void => {
+  const finish = laps.lastFinish()
+  if (session.view().lap.phase !== "finished" || finish === null) return
+  if (finish.replay !== null) rerun.start(finish.replay)
+  panels.lapShown()
+}
+const hud = createHud(
+  stage,
+  track,
+  {
+    best: () => laps.best(),
+    ghost: () => ghost.current(),
+    ghostLoading: () => online.state().ghostLoading,
+    lastFinish: () => laps.lastFinish(),
+    rank: () => online.state().rank,
+    post: () => online.state().post,
+    online: () => online.state().enabled,
+    name: () => online.state().identity?.name ?? null
+  },
+  showLapAgain
+)
+createMadeWith(document, panelAlpha)
+const replayLook = createReplayLook(document, stage.app.canvas)
 const audio = createAudio(loaded?.settings.muted ?? false)
 const input = createInput(window)
 online.start()
@@ -184,8 +206,13 @@ const checkpointGap = (event: RaceEvent): number | null => {
   return reference === undefined ? null : event.timeMs - reference
 }
 
-/** Events from the ticks since the last frame, for the frame's actors, HUD and sound. */
+/** Events of the player's race from the ticks since the last frame, for the frame's actors, HUD and sound. */
 let pending: Array<RaceEvent> = []
+/** The same from the lap being shown again: for the actors and the sound of what the car hits. */
+let replayed: Array<RaceEvent> = []
+
+/** The events of a lap shown again that are heard: what the car hit, never the lap's own chimes. */
+const heardAgain = (event: RaceEvent): boolean => event.kind !== "start" && event.kind !== "checkpoint" && event.kind !== "finish" && event.kind !== "reset"
 
 /** What the HUD should call the controls, from the last tick's input. */
 let padLabel: "none" | "keyboard" | "gamepad" | "buttons-only" = "none"
@@ -195,6 +222,7 @@ const rumbleFor = (event: RaceEvent): void => {
   if (event.kind === "wall") input.rumble(Math.min(1, 0.25 + event.impact / 14), 110, true)
   else if (event.kind === "land") input.rumble(Math.min(1, 0.3 + event.impact / 14), 180, false)
   else if (event.kind === "prop") input.rumble(Math.min(1, (event.prop === "cone" ? 0.1 : event.prop === "ball" ? 0.4 : 0.25) + event.impact / 20), event.prop === "ball" ? 180 : 110, event.prop !== "ball")
+  else if (event.kind === "bump") input.rumble(Math.min(1, 0.3 + event.speed / 60), 140, true)
   else if (event.kind === "bollard") input.rumble(Math.min(1, 0.4 + event.impact / 12), 160, true)
   else if (event.kind === "door") input.rumble(Math.min(1, 0.3 + event.impact / 14), 200, false)
   else if (event.kind === "boost") input.rumble(0.45, 320, false)
@@ -202,17 +230,7 @@ const rumbleFor = (event: RaceEvent): void => {
 }
 
 const step = (): void => {
-  const variant = session.variant()
-  const read = input.read(variant.startsWith("screen"), stage.groundDirection)
-  // A replay holds one steering: changing it while an attempt is under way starts it again.
-  let restart = false
-  if (read.cycleVariant && session.variants.length > 1) {
-    const next = session.variants[(session.variants.indexOf(variant) + 1) % session.variants.length] ?? variant
-    restart = laps.recording()
-    session.setVariant(next)
-    if (isSteering(next)) void run(Settings.use((settings) => settings.change({ steering: next })))
-    hud.toast(`steering: ${steeringName(next)}`)
-  }
+  const read = input.read()
   const label = read.pad.kind === "none" ? "none" : read.pad.kind === "buttons-only" ? "buttons-only" : read.pad.active ? "gamepad" : "keyboard"
   if (label !== padLabel) {
     if (padLabel === "none") hud.toast(label === "buttons-only" ? "gamepad connected: buttons only" : "gamepad connected")
@@ -227,14 +245,28 @@ const step = (): void => {
     void run(Settings.use((settings) => settings.change({ muted })))
     hud.toast(muted ? "sound off" : "sound on")
   }
-  const asked = window.__race?.drive?.(session.view(), track) ?? read.drive
+  const wanted = window.__race?.drive?.(session.view(), track) ?? read.drive
+  // While the lap is shown again the player's car is out of sight: only starting again reaches it.
+  const asked = rerun.active() ? { ...idleInput, restart: wanted.restart } : wanted
   // The simulation is given what a replay can hold, so the replay drives the same lap.
-  const drive = quantise(restart ? { ...asked, restart: true } : asked)
+  const drive = quantise(asked)
   session.tick(drive)
   const events = session.drainEvents()
   const finish = laps.afterTick(drive, session.view(), events)
   if (finish !== null) online.finished(finish)
-  for (const event of events) pending.push(event)
+  for (const event of events) {
+    if (event.kind === "reset") {
+      // Starting again is immediate: the replay, its board and what it left for this frame go.
+      rerun.stop()
+      replayed = []
+      panels.lapReset()
+    } else if (rerun.active()) {
+      // What the unseen car rolls into is neither drawn nor heard.
+      continue
+    }
+    pending.push(event)
+  }
+  if (rerun.active()) for (const event of rerun.tick()) replayed.push(event)
 }
 
 /** The time between drawn frames, measured here since the loop's own is clamped. */
@@ -261,20 +293,31 @@ const loop = FixedLoop.start({
     const seconds = Math.min(0.1, (nowMs - lastFrame) / 1000)
     lastFrame = nowMs
     const view = session.view()
+    const replaying = rerun.active()
+    // What is drawn: the lap shown again, or the player's race.
+    const shown = replaying ? rerun.view() : view
     const events = pending
     pending = []
     for (const event of events) {
       if (event.kind === "start") panels.lapStarted()
+      else if (event.kind === "finish") panels.lapFinished()
       actors.handle(event, view)
       hud.handle(event, view)
       audio.handle(event, view, checkpointGap(event))
       rumbleFor(event)
     }
-    scene.update(view, seconds)
-    actors.update(view, ghost.pose(view), seconds)
-    hud.update(view, { variant: session.variant(), muted: audio.muted(), pad: padLabel }, seconds)
+    const again = replayed
+    replayed = []
+    for (const event of again) {
+      actors.handle(event, shown)
+      if (heardAgain(event)) audio.handle(event, shown, null)
+    }
+    scene.update(shown, seconds)
+    actors.update(shown, ghost.pose(shown, view.lap.phase === "running"), seconds)
+    hud.update(view, { pad: padLabel, car: shown.car, replay: replaying }, seconds)
     panels.update(view.lap.phase === "running")
-    audio.update(view)
+    replayLook.show(replaying)
+    audio.update(shown)
     stage.app.ticker.update(nowMs)
   },
   onFailure: (failure) => console.error("the race loop stopped", failure)

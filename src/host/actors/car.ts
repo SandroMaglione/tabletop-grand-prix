@@ -220,17 +220,29 @@ export const createCar = (parent: Container3D) => {
   /** Speed last frame and the smoothed change of it, m/s^2: what the body reacts to. */
   let lastSpeed = 0
   let accel = 0
+  /** Thrown off a rock and not yet down: the landing that follows squashes harder. */
+  let hopped = false
   return {
     model,
     /** Starts the pop-in from nothing. */
     popIn() {
       pop = 0
+      hopped = false
     },
-    /** A landing pushes the body down on its springs and flattens it for a moment. */
+    /** A landing pushes the body down on its springs and flattens it for a moment; after a rock's throw, harder. */
     land(impact: number) {
-      const hit = clamp(impact, 0, 20)
+      const hit = clamp(impact, 0, 20) * (hopped ? 1.9 : 1)
+      hopped = false
       bounceSpeed -= hit * 0.16
       squashYSpeed += hit * 0.6
+    },
+    /** Thrown off a rock: the nose kicks up as the front wheels ride it, and the body stretches a little. */
+    hop(strength: number) {
+      const k = clamp(strength, 0, 1)
+      hopped = true
+      leanPitchSpeed += 2.4 + k * 3
+      bounceSpeed += 0.6 + k * 0.8
+      stretchSpeed += 0.8 + k * 1.2
     },
     /** A hit kicks the body sideways and pinches it. */
     knock(amount: number) {
@@ -240,6 +252,12 @@ export const createCar = (parent: Container3D) => {
     /** The boost pad's shove: the body snaps long. */
     surge() {
       stretchSpeed += 4.5
+    },
+    /** A small kick to the springs from a bumpy surface: up and down, side to side, flatter or taller. */
+    jolt(up: number, side: number, flatten: number) {
+      bounceSpeed += up
+      leanRollSpeed += side
+      squashYSpeed += flatten
     },
     /** The smoothed forward acceleration the body is reacting to, m/s^2. */
     accel: () => accel,

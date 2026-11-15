@@ -169,6 +169,22 @@ export interface Handling {
   readonly boostAccel: number
   /** Speed limit while on a pad, m/s; it falls back to `topSpeed` over `boostFade` after the pad. */
   readonly boostTopSpeed: number
+
+  // Surfaces.
+  /** Share of its speed the car loses per second on grass, on top of everything else. */
+  readonly grassDrag: number
+  /** The same in water. */
+  readonly waterDrag: number
+
+  // Bumps.
+  /** Speed below which a bump is only rolled over, m/s. */
+  readonly bumpFrom: number
+  /** Upward speed a bump gives per m/s of the car's speed ... */
+  readonly bumpKick: number
+  /** ... and the most it gives, m/s. */
+  readonly bumpKickMax: number
+  /** Share of speed a bump costs. */
+  readonly bumpLoss: number
 }
 
 /** The car. */
@@ -212,7 +228,13 @@ export const handling: Handling = {
   wallEventImpact: 4,
   wallLetGo: 0.25,
   boostAccel: 34,
-  boostTopSpeed: 36
+  boostTopSpeed: 36,
+  grassDrag: 0.15,
+  waterDrag: 0.6,
+  bumpFrom: 6,
+  bumpKick: 0.13,
+  bumpKickMax: 3.4,
+  bumpLoss: 0.04
 }
 
 type Meta<Value> = { readonly [K in keyof Value]: { readonly unit: string; readonly range: readonly [number, number]; readonly hint?: string } }
@@ -258,7 +280,13 @@ export const handlingMeta = {
   wallEventImpact: { unit: "m/s", range: [1, 10] },
   wallLetGo: { unit: "m", range: [0.05, 0.6] },
   boostAccel: { unit: "m/s^2", range: [10, 60] },
-  boostTopSpeed: { unit: "m/s", range: [30, 50] }
+  boostTopSpeed: { unit: "m/s", range: [30, 50] },
+  grassDrag: { unit: "1/s", range: [0, 1] },
+  waterDrag: { unit: "1/s", range: [0, 2] },
+  bumpFrom: { unit: "m/s", range: [2, 15] },
+  bumpKick: { unit: "m/s per m/s", range: [0.02, 0.3] },
+  bumpKickMax: { unit: "m/s", range: [1, 6], hint: "With gravity, how long the car is off the ground." },
+  bumpLoss: { unit: "share", range: [0, 0.3] }
 } as const satisfies Meta<Handling>
 
 /** The unit of each contact number and the range it is tuned within. */

@@ -1,5 +1,7 @@
 # Tabletop Grand Prix
 
+Play it at https://tabletop-grand-prix.typeonce.games.
+
 A solo time-attack racer on one screen, made with [ritmo](https://ritmo.typeonce.dev) and PixiJS 3D.
 
 ```sh
@@ -14,4 +16,5 @@ The design is in [docs/design.md](docs/design.md); the leaderboard's server (Clo
 - `pnpm dev:server` runs the page with a local server and database.
 - `pnpm deploy:staging --yes` and `pnpm deploy:prod --yes` deploy the site and the server.
 - `node scripts/online-real.ts <site url>` plays a first visit on a deployed site (drive a lap, pick a name, post it, read the board); use it on staging.
+- `node scripts/lap-end.ts` drives a lap on the dev server and checks what follows the finish (the wipe, the replay, the board, `R`), with pictures in `output/`.
 - `pnpm verify:engines` checks that a replay gives the same lap in Chromium, Firefox, WebKit and Node.

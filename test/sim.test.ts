@@ -4,8 +4,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { botInput } from "../src/sim/bot.ts"
-import { createSession, fixtureTrack, idleInput, indexAt, locateNear, track } from "../src/sim/index.ts"
-import type { DriveInput, RaceEvent, RaceSession, RaceView } from "../src/sim/index.ts"
+import { createSession, fixtureTrack, idleInput, indexAt, locateNear, pointAt, surfaceAt, track } from "../src/sim/index.ts"
+import type { DriveInput, RaceEvent, RaceSession, RaceView, TrackData } from "../src/sim/index.ts"
 import { STEERINGS as variantNames } from "../src/sim/schema.ts"
 import { handling } from "../src/sim/tuning.ts"
 
@@ -211,4 +211,60 @@ test("leaning on a wall all the way round the real track never takes off or rese
       assert.equal(strays.length, 0, `side ${side}, throttle ${throttle}: ${strays.length} take-offs away from the jump`)
     }
   }
+})
+
+test("grass holds the car back, water more, an oval only inside its ellipse, and the view says what is under the car", () => {
+  const patch = { shape: "strip", sFrom: 4, sTo: 26, dFrom: -10, dTo: 10 } as const
+  const reach = (surfaces: TrackData["surfaces"]): { s: number; seen: ReadonlySet<string> } => {
+    const session = createSession({ ...fixtureTrack, surfaces })
+    const seen = new Set<string>()
+    run(session, 1.8, (view) => {
+      seen.add(view.car.surface)
+      return { ...idleInput, throttle: 1 }
+    })
+    return { s: session.view().car.s, seen }
+  }
+  const road = reach([])
+  const grass = reach([{ ...patch, kind: "grass" }])
+  const water = reach([{ ...patch, kind: "water" }])
+  const stones = reach([{ ...patch, kind: "stones" }])
+  assert.deepEqual([...road.seen], ["road"])
+  assert.ok(grass.seen.has("grass") && grass.seen.has("road"))
+  assert.ok(grass.s < road.s - 0.3, `grass ${grass.s} against road ${road.s}`)
+  assert.ok(water.s < grass.s - 0.5, `water ${water.s} against grass ${grass.s}`)
+  // Stones are a picture: the lap is the plain road's.
+  assert.equal(stones.s, road.s)
+  assert.ok(stones.seen.has("stones"))
+
+  // The corner of an oval's box is outside the oval.
+  const oval = [{ kind: "water", shape: "oval", sFrom: 10, sTo: 20, dFrom: -2, dTo: 2 }] as const
+  const withOval = { ...fixtureTrack, surfaces: oval }
+  assert.equal(surfaceAt(withOval, 15, 0), "water")
+  assert.equal(surfaceAt(withOval, 10.5, 1.8), null)
+  assert.equal(surfaceAt(withOval, 15, 2.5), null)
+})
+
+test("a rock in the road throws a fast car up and it lands a little slower; a slow car rolls over it", () => {
+  const rock = pointAt(fixtureTrack, 16, 0)
+  const bumpy: TrackData = { ...fixtureTrack, bumps: [{ x: rock.x, y: rock.y, z: rock.z, radius: 0.95, height: 0.3 }] }
+  const fast = createSession(bumpy)
+  const plain = createSession(fixtureTrack)
+  let airborne = 0
+  const events = run(fast, 2.5, (view) => {
+    if (!view.car.grounded) airborne++
+    return botInput(view, bumpy)
+  })
+  run(plain, 2.5, (view) => botInput(view, fixtureTrack))
+  const bump = events.find((event) => event.kind === "bump")
+  assert.ok(bump?.kind === "bump" && bump.speed > handling.bumpFrom, "the car was never thrown")
+  assert.equal(events.filter((event) => event.kind === "bump").length, 1, "one rock throws once")
+  assert.ok(events.some((event) => event.kind === "land") && !events.some((event) => event.kind === "reset"), "it comes down on the road, and the lap goes on")
+  assert.ok(airborne > 10 && airborne < 60, `in the air for ${airborne} ticks`)
+  assert.ok(fast.view().car.grounded && fast.view().car.s < plain.view().car.s, "the hop costs a little")
+
+  // Crawling over it: no hop.
+  const slow = createSession(bumpy)
+  const crawl = run(slow, 20, (view) => ({ ...botInput(view, bumpy), throttle: view.car.speed < 4 ? 0.5 : 0, brake: 0 }), (_, view) => view.car.s > 20 && view.car.s < 30)
+  assert.ok(slow.view().car.s > 20, "the slow car never got past the rock")
+  assert.ok(!crawl.some((event) => event.kind === "bump"))
 })

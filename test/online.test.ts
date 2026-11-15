@@ -146,6 +146,9 @@ const page = (store: KeyValueStore.KeyValueStore, leaderboard: Layer.Layer<Leade
   return { app, run }
 }
 
+/** The made-up names the pages draw, in order: the first belongs to one of the stand-in's players. */
+const handles = ["Pebble", "Shy Otter Skids"]
+
 const start = (run: ReturnType<typeof page>["run"], laps: Laps, identity: Identity | null = null): Online => {
   const online = createOnline({
     enabled: true,
@@ -159,7 +162,8 @@ const start = (run: ReturnType<typeof page>["run"], laps: Laps, identity: Identi
     rival: noRival,
     tracks: tracks.map((one) => one.id),
     defer: (work) => work(),
-    timeoutMs: 2000
+    timeoutMs: 2000,
+    handle: () => handles.shift() ?? "Lazy Sloth Naps"
   })
   online.start()
   return online
@@ -175,16 +179,19 @@ test("first lap, a name, the lap sent, the next closest rival; the server down k
   const slowest = fixture.runs["spindle-leap"].reduce((a, b) => (a.timeMs > b.timeMs ? a : b))
   assert.equal(online.state().board?.total, fixture.runs["spindle-leap"].length)
 
-  // The first lap: no name yet, so it waits and a name is offered once.
+  // The first lap: the player is given a made-up name (the first one drawn is taken, so
+  // another is drawn) and the lap goes to the board under it, with nothing asked.
   const first = driveLap(laps, slowly)
   online.finished(first)
-  await until("the first post", () => online.state().post?.state.kind === "unlisted")
-  assert.equal(online.state().namePrompts, 1)
+  assert.equal(online.state().post?.state.kind, "sending", "the lap is on its way while the name is made up")
+  await until("the lap sent", () => online.state().post?.state.kind === "sent")
+  assert.equal(online.state().identity?.name, "Shy Otter Skids")
+  assert.equal(online.state().namePrompts, 0)
+  const sent = online.state().post?.state
+  // The name is the player's to change.
   assert.deepEqual(await online.checkName("Pebble"), { kind: "taken" })
   assert.deepEqual(await online.checkName("Lap Hound"), { kind: "ok" })
   assert.deepEqual(await online.saveName("Lap Hound"), { kind: "ok" })
-  await until("the lap sent", () => online.state().post?.state.kind === "sent")
-  const sent = online.state().post?.state
   assert.ok(sent?.kind === "sent" && sent.total === fixture.runs["spindle-leap"].length + 1)
   const ahead = fixture.runs["spindle-leap"].filter((run) => Math.round(run.timeMs) < Math.round(first.timeMs)).length
   assert.equal(sent.rank, ahead + 1)

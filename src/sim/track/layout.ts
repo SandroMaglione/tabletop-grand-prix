@@ -4,11 +4,14 @@
  * Seen from the camera (+Z at the bottom of the screen), one lap goes:
  *
  * 1. Start straight in the middle of the table, driving away from the camera, under the
- *    jump's gap. Left turn onto the far straight, which widens for the slalom: three rows
- *    of posts, each closing the right or the left of the road in turn.
- * 2. A wide left sweeper at the far left corner, down the left side toward the camera past
- *    three heavy balls, left onto the long near straight: a boost pad, then the crate wall
- *    (two high, a gap on the left, barrels behind it), then fast esses.
+ *    jump's gap and through the ford: a pool over the right of the road, a dry lane on the
+ *    left. Left turn onto the far straight, which widens for the slalom: three rows of
+ *    posts, each closing the right or the left of the road in turn.
+ * 2. A wide left sweeper at the far left corner with long grass over its inside, down the
+ *    left side toward the camera past three heavy balls, left onto the long near straight:
+ *    a boost pad, then the crate wall (two high, a gap on the left, barrels behind it),
+ *    then fast esses over rough stony ground with rocks jutting out of it: the car is
+ *    thrown up by each one it rolls onto.
  * 3. Banked left hairpin in the near right corner, a right kink, and the approach climbs
  *    into the spiral: a right-hand loop of 300 degrees in the far right corner that comes
  *    back over its own approach on a bridge.
@@ -78,6 +81,38 @@ const padHigh = plan.at("high", 9)
 const doorsAt = plan.at("mid", 14)
 
 /**
+ * The ford: a pool over the right two thirds of the start straight, where the wide line into
+ * the first corner runs. Water holds the car back; the dry lane on the left is the tight line
+ * into the corner. Either way is a choice, never a toss of a coin.
+ */
+const ford = { kind: "water", shape: "oval", sFrom: 9.5, sTo: 18, dFrom: -HALF_WIDTH, dTo: 1.2 } as const
+
+/**
+ * The meadow: long grass over the inside three quarters of the sweeper. Through it is the
+ * short way round and costs a little speed; a lane stays clear along the outside wall.
+ */
+const meadow = { kind: "grass", shape: "strip", sFrom: plan.at("sweeper", 2), sTo: plan.end("sweeper", -2), dFrom: -1.5, dTo: HALF_WIDTH } as const
+
+/**
+ * The stony ground through the esses: rough, and still road. The rocks that jut out of it
+ * are low enough to drive over, and each one the car rolls onto at speed throws it up for
+ * a moment. They stand here and there with room to weave between them; the last is well
+ * before the braking for the hairpin, so the car is on its wheels when it must slow.
+ */
+const esses = plan.at("esses")
+const stones = { kind: "stones", shape: "strip", sFrom: esses + 4, sTo: plan.at("brake", -1), dFrom: -HALF_WIDTH, dTo: HALF_WIDTH } as const
+const rocks = [
+  { s: esses + 7, d: -1.9, radius: 0.5 },
+  { s: esses + 10.5, d: 1.5, radius: 0.6 },
+  { s: esses + 14, d: -0.4, radius: 0.45 },
+  { s: esses + 17.5, d: 2.2, radius: 0.5 },
+  { s: esses + 20.5, d: -2.1, radius: 0.65 },
+  { s: esses + 23.5, d: 0.6, radius: 0.5 },
+  { s: esses + 26.5, d: -1.0, radius: 0.55 },
+  { s: esses + 28.5, d: 2.3, radius: 0.45 }
+]
+
+/**
  * The slalom: each row is a fence of three posts that closes one side of the road. The
  * fence slants, from the wall back toward the middle, so a car that hits it glances off
  * toward the open side instead of stopping in it; the posts stand closer than the car is
@@ -145,6 +180,8 @@ export const layoutTrack: TrackData = buildTrack({
     { kind: "barrel", s: cratesAt + 3.4, d: -2 }
   ],
   bollards: posts,
+  bumps: rocks,
+  surfaces: [ford, meadow, stones],
   doors: [doorsAt],
   boosts: [
     { s: padNear, d: 0, ...PAD },
@@ -152,15 +189,18 @@ export const layoutTrack: TrackData = buildTrack({
   ],
   checkpoints: [0, Math.round(L / 3), Math.round((2 * L) / 3)],
   features: [
+    { kind: "ford", sFrom: ford.sFrom, sTo: ford.sTo },
     { kind: "slalom", sFrom: far + 3, sTo: far + 30 },
+    { kind: "meadow", sFrom: meadow.sFrom, sTo: meadow.sTo },
     { kind: "balls", sFrom: left + 3, sTo: left + 19 },
     { kind: "boost", sFrom: padNear - PAD.length / 2, sTo: padNear + PAD.length / 2 },
     { kind: "crates", sFrom: cratesAt - 1, sTo: cratesAt + 4.5 },
+    { kind: "rocks", sFrom: stones.sFrom, sTo: stones.sTo },
     { kind: "banked", sFrom: plan.at("banked"), sTo: plan.end("banked") },
     { kind: "spiral", sFrom: plan.at("approach"), sTo: plan.at("high", 7) },
     { kind: "boost", sFrom: padHigh - PAD.length / 2, sTo: padHigh + PAD.length / 2 },
     { kind: "jump", sFrom: plan.at("kicker"), sTo: plan.end("landing") },
     { kind: "doors", sFrom: doorsAt - 1, sTo: doorsAt + 1 }
   ],
-  medals: { bronze: 32000, silver: 28500, gold: 25500 }
+  medals: { bronze: 32500, silver: 28900, gold: 25900 }
 })

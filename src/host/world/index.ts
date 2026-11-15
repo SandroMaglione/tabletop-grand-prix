@@ -12,6 +12,14 @@
  * - wind turbines along the back (`turbines.ts`) whose rotors turn on `update`, so their
  *   shadows sweep the grass, with emissive warning lamps (they glow under the stage's
  *   optional bloom).
+ *
+ * The track's surface patches each have their own module (`patches.ts` holds what they share):
+ * - the meadow (`meadow.ts`): dark turf and clumps of long instanced blades that lean in
+ *   travelling waves of wind and lie down where the car drives, through a press map it stamps
+ *   on `update`, leaving a lane that rises again over a few seconds;
+ * - the ford (`ford.ts`): a wet bed and a pool whose ripples and car-made rings are shader bits;
+ * - the stony ground (`stones.ts`): rough dirt and gravel with ruts, sunk stones and pebbles,
+ *   and the track's bumps as low rounded rocks half buried in it.
  */
 import { Container3D, Material3D, Mesh3D, PlaneGeometry } from "@pixi/3d"
 import type { TrackData } from "../../sim/index.ts"
@@ -21,9 +29,12 @@ import { CAMERA_ELEVATION_DEG, CAMERA_YAW_DEG, SUN_ELEVATION_DEG, SUN_YAW_DEG } 
 import { MeshBuilder } from "./builder.ts"
 import { slabBox } from "./dimensions.ts"
 import { createField } from "./field.ts"
+import { buildFord } from "./ford.ts"
+import { buildMeadow } from "./meadow.ts"
 import { buildWater, placePond, withPond } from "./pond.ts"
 import { buildRoad } from "./road.ts"
 import { buildScenery } from "./scenery.ts"
+import { buildStones } from "./stones.ts"
 import { buildTerrain } from "./terrain.ts"
 import { buildTurbines } from "./turbines.ts"
 
@@ -92,10 +103,15 @@ export const createTrackScene = (stage: Stage, track: TrackData): TrackScene => 
 
   if (pond !== null) root.addChild(buildWater(pond, field, track))
   root.addChild(turbines.root)
+  const meadow = buildMeadow(track)
+  const ford = buildFord(track)
+  root.addChild(meadow.root, ford.root, buildStones(track))
 
   return {
-    update(_view, seconds) {
+    update(view, seconds) {
       turbines.update(seconds)
+      meadow.update(view, seconds)
+      ford.update(view, seconds)
     }
   }
 }

@@ -8,7 +8,7 @@ import * as Cloudflare from "@alchemy.run/cloudflare"
 import * as Alchemy from "alchemy"
 import { Stage } from "alchemy/Stage"
 import * as Effect from "effect/Effect"
-import { siteWorkerName } from "./src/server/stage.ts"
+import { productionDomain, siteWorkerName } from "./src/server/stage.ts"
 import Api, { Database } from "./src/server/worker.ts"
 
 export default Alchemy.Stack(
@@ -20,6 +20,8 @@ export default Alchemy.Stack(
     const api = yield* Api
     const site = yield* Cloudflare.Website.Vite("Site", {
       name: siteWorkerName(stage),
+      // Only production claims the game's address; the other stages stay on workers.dev.
+      ...(stage === "prod" ? { domain: productionDomain } : {}),
       env: { VITE_API_URL: api.url.as<string>() },
       compatibility: { date: "2026-10-01" },
       // The same port as `pnpm dev`, so local dev is one of the origins the API allows.

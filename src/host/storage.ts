@@ -59,14 +59,13 @@ export const gameStore: Effect.Effect<KeyValueStore.KeyValueStore, never, KeyVal
 
 /**
  * The saves of the build before this one sat in localStorage: the best laps as positions,
- * which are dropped (a best lap is now a replay), and the two settings, which are handed
- * back once so the player keeps them. Every old key is removed.
+ * which are dropped (a best lap is now a replay), and whether the sound was on, which is
+ * handed back once so the player keeps it. Every old key is removed.
  */
-export const takeLegacySettings = (): { readonly steering: string | null; readonly muted: boolean | null } => {
+export const takeLegacySettings = (): { readonly muted: boolean | null } => {
   try {
     const storage = window.localStorage
     const old = "tabletop-grand-prix:"
-    const steering = storage.getItem(`${old}variant`)
     const muted = storage.getItem(`${old}muted`)
     const keys: Array<string> = []
     for (let i = 0; i < storage.length; i++) {
@@ -74,8 +73,8 @@ export const takeLegacySettings = (): { readonly steering: string | null; readon
       if (key !== null && key.startsWith(old)) keys.push(key)
     }
     for (const key of keys) storage.removeItem(key)
-    return { steering, muted: muted === null ? null : muted === "1" }
+    return { muted: muted === null ? null : muted === "1" }
   } catch {
-    return { steering: null, muted: null }
+    return { muted: null }
   }
 }

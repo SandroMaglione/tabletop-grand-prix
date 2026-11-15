@@ -94,6 +94,44 @@ export interface SwingDoor {
   readonly maxAngle: number
 }
 
+/**
+ * A rock jutting out of the road, low enough to drive over. A car that rolls onto it at
+ * speed is thrown up and comes down a few metres on: for that moment it has no engine, no
+ * brakes and little steering, and the knock costs a little speed. Nothing stops at a bump.
+ */
+export interface Bump {
+  /** Centre of its base on the road surface. */
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  /** The circle the car's centre must reach to be thrown (the car's own width included). */
+  readonly radius: number
+  /** How far it stands out of the road, for the picture. */
+  readonly height: number
+}
+
+/** What the road is made of where it is not plain road. */
+export type SurfaceKind = "grass" | "water" | "stones"
+
+/**
+ * A patch of the road with its own surface, as a box in road coordinates: centreline
+ * distances `sFrom` to `sTo` (never across the start line) and lateral offsets `dFrom` to
+ * `dTo` (positive left). A `strip` fills the box; an `oval` fills the ellipse inside it.
+ *
+ * Grass and water hold the car back while its centre is on them (`Handling.grassDrag`,
+ * `Handling.waterDrag`). Stones are
+ * rough ground: they change nothing but the picture, and the rocks that jut out of them are
+ * `Bump`s. `surfaceAt` (track queries) answers which patch a point is on.
+ */
+export interface SurfacePatch {
+  readonly kind: SurfaceKind
+  readonly shape: "strip" | "oval"
+  readonly sFrom: number
+  readonly sTo: number
+  readonly dFrom: number
+  readonly dTo: number
+}
+
 /** A strip of road that pushes the car forward while it is on it. */
 export interface BoostPad {
   /** Centre of the pad on the road surface. */
@@ -110,7 +148,7 @@ export interface BoostPad {
 
 /** A named stretch of track, for the picture and the HUD (never for rules). */
 export interface TrackFeature {
-  readonly kind: "jump" | "spiral" | "banked" | "bridge" | "boost" | "crates" | "slalom" | "balls" | "doors"
+  readonly kind: "jump" | "spiral" | "banked" | "bridge" | "boost" | "crates" | "slalom" | "balls" | "doors" | "ford" | "meadow" | "rocks"
   readonly sFrom: number
   readonly sTo: number
 }
@@ -137,6 +175,9 @@ export interface TrackData {
   readonly props: ReadonlyArray<PropPlacement>
   readonly bollards: ReadonlyArray<Bollard>
   readonly doors: ReadonlyArray<SwingDoor>
+  readonly bumps: ReadonlyArray<Bump>
+  /** Patches of grass, water and stones. They do not overlap. */
+  readonly surfaces: ReadonlyArray<SurfacePatch>
   readonly features: ReadonlyArray<TrackFeature>
   /** The box that holds every sample, walls included, for fitting the camera and the terrain. */
   readonly bounds: { readonly minX: number; readonly maxX: number; readonly minZ: number; readonly maxZ: number; readonly maxY: number }
@@ -187,6 +228,8 @@ export interface CarView {
   readonly boosting: boolean
   /** Centreline distance of the car, in metres. */
   readonly s: number
+  /** What is under the car's centre: a patch's surface, or plain `road` (also while in the air). */
+  readonly surface: SurfaceKind | "road"
 }
 
 export interface LapView {
@@ -245,6 +288,8 @@ export type RaceEvent =
   | { readonly kind: "prop"; readonly index: number; readonly prop: PropKind; readonly impact: number; readonly x: number; readonly y: number; readonly z: number }
   /** A prop hit a wall, a bollard, the road (falling off a stack) or another prop, hard enough to hear. */
   | { readonly kind: "knock"; readonly index: number; readonly prop: PropKind; readonly impact: number; readonly x: number; readonly y: number; readonly z: number }
+  /** The car rolled onto a bump at `speed` m/s and was thrown up. A `land` follows when it comes down. */
+  | { readonly kind: "bump"; readonly index: number; readonly speed: number; readonly x: number; readonly y: number; readonly z: number }
   /** The car hit a bollard. */
   | { readonly kind: "bollard"; readonly index: number; readonly impact: number; readonly x: number; readonly y: number; readonly z: number }
   /** The car hit a door leaf. */

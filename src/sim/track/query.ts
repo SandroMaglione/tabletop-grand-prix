@@ -9,7 +9,7 @@
  * - `locateBelow`: the car is in the air. Which road surface is under it, if any?
  */
 import { Ops } from "@typeonce/ritmo"
-import type { TrackData, TrackSample } from "../types.ts"
+import type { SurfaceKind, TrackData, TrackSample } from "../types.ts"
 
 export interface TrackHit {
   /** Index of the sample that starts the segment the point is on. */
@@ -161,4 +161,17 @@ export const pointAt = (track: TrackData, s: number, d: number = 0): { x: number
     pitch: a.pitch + (b.pitch - a.pitch) * t,
     bank
   }
+}
+
+/** The surface patch at centreline distance `s` and lateral offset `d`, or null on plain road. */
+export const surfaceAt = (track: TrackData, s: number, d: number): SurfaceKind | null => {
+  for (const patch of track.surfaces) {
+    if (s < patch.sFrom || s > patch.sTo || d < patch.dFrom || d > patch.dTo) continue
+    if (patch.shape === "strip") return patch.kind
+    // An oval: the ellipse inside the box.
+    const along = (2 * s - patch.sFrom - patch.sTo) / (patch.sTo - patch.sFrom)
+    const across = (2 * d - patch.dFrom - patch.dTo) / (patch.dTo - patch.dFrom)
+    if (along * along + across * across <= 1) return patch.kind
+  }
+  return null
 }

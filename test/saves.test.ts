@@ -44,7 +44,7 @@ test("a first visit has the default settings, no name and nothing per board", as
       }
     })
   )
-  assert.deepEqual(seen.settings, { version: 1, steering: "car", muted: false, track: "" })
+  assert.deepEqual(seen.settings, { version: 3, muted: false, track: "", board: true })
   assert.equal(seen.fresh, true)
   assert.deepEqual(seen.profile, { version: 1, identity: null, asked: false })
   assert.equal(seen.best, null)
@@ -59,7 +59,7 @@ test("settings, the name, the best lap and the rival come back on the next visit
   await visit(
     store,
     Effect.gen(function*() {
-      yield* (yield* Settings).change({ steering: "screen", muted: true })
+      yield* (yield* Settings).change({ muted: true, track: "elsewhere" })
       yield* (yield* Profile).setIdentity(identity)
       yield* Bests.use((bests) => bests.set("spindle-leap", 1, best))
       yield* Rivals.use((rivals) => rivals.set("spindle-leap", 1, rival))
@@ -78,7 +78,7 @@ test("settings, the name, the best lap and the rival come back on the next visit
       }
     })
   )
-  assert.equal(again.settings.steering, "screen")
+  assert.equal(again.settings.track, "elsewhere")
   assert.equal(again.settings.muted, true)
   assert.deepEqual(again.profile, { version: 1, identity, asked: true })
   assert.deepEqual(again.best, best)
@@ -99,7 +99,7 @@ test("an unreadable save is kept aside and reads as nothing", async () => {
     })
   )
   assert.equal(seen.best, null)
-  assert.equal(seen.settings.steering, "car")
+  assert.equal(seen.settings.version, 3)
   assert.equal(await Effect.runPromise(store.get(`${key}.unreadable`)), "{ not json")
   assert.equal(await Effect.runPromise(store.get(`${storagePrefix}settings.unreadable`)), JSON.stringify({ version: 9 }))
 })

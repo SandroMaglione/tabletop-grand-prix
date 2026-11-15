@@ -13,7 +13,7 @@
  *    pads and gates by centreline distance `s` and lateral offset `d`.
  */
 import { Ops } from "@typeonce/ritmo"
-import type { Bollard, BoostPad, PropKind, PropPlacement, SwingDoor, TrackData, TrackFeature, TrackSample } from "../types.ts"
+import type { Bollard, BoostPad, Bump, PropKind, PropPlacement, SurfacePatch, SwingDoor, TrackData, TrackFeature, TrackSample } from "../types.ts"
 import { pointAt } from "./query.ts"
 
 const TAU = Math.PI * 2
@@ -234,6 +234,10 @@ export interface TrackSpec {
   readonly props: ReadonlyArray<PropSpec>
   /** Fixed posts, by centreline distance and lateral offset. */
   readonly bollards: ReadonlyArray<{ readonly s: number; readonly d: number }>
+  /** Rocks to drive over, each with the radius of the rock itself. */
+  readonly bumps: ReadonlyArray<{ readonly s: number; readonly d: number; readonly radius: number }>
+  /** Patches of grass, water and stones, in road coordinates. */
+  readonly surfaces: ReadonlyArray<SurfacePatch>
   /** Swing doors: at each distance two leaves, hinged at the two walls, meet in the middle of the road. */
   readonly doors: ReadonlyArray<number>
   readonly boosts: ReadonlyArray<{ readonly s: number; readonly d: number; readonly length: number; readonly width: number }>
@@ -302,6 +306,8 @@ const BRIDGE_REACH = 4
 /** Lower road counts as under a deck when it is this much lower. */
 const BRIDGE_DROP = 3
 const BOLLARD = { radius: 0.45, height: 1.3 }
+/** How far from the car's centre its wheels are: a bump throws the car when a wheel rolls onto it. */
+const BUMP_REACH = 0.45
 /** A door leaf; `seam` is the gap between the two leaves of a pair. It stops a little short of lying flat on the wall. */
 const DOOR = { height: 1, thickness: 0.2, seam: 0.2, maxAngle: 1.4 }
 
@@ -392,6 +398,8 @@ export const buildTrack = (spec: TrackSpec): TrackData => {
     props: [],
     bollards: [],
     doors: [],
+    bumps: [],
+    surfaces: [],
     features,
     bounds: { minX: 0, maxX: 0, minZ: 0, maxZ: 0, maxY: 0 },
     medals: spec.medals
@@ -406,6 +414,14 @@ export const buildTrack = (spec: TrackSpec): TrackData => {
     const point = pointAt(shell, post.s, post.d)
     return { x: point.x, y: point.y, z: point.z, radius: BOLLARD.radius, height: BOLLARD.height }
   })
+  const bumps: ReadonlyArray<Bump> = spec.bumps.map((rock) => {
+    const point = pointAt(shell, rock.s, rock.d)
+    // A wheel reaches the rock before the car's centre does; the rock stands out by a third of its width.
+    return { x: point.x, y: point.y, z: point.z, radius: rock.radius + BUMP_REACH, height: rock.radius * 0.65 }
+  })
+  for (const patch of spec.surfaces) {
+    if (!(patch.sFrom >= 0 && patch.sTo > patch.sFrom && patch.sTo <= length && patch.dTo > patch.dFrom)) throw new Error(`A ${patch.kind} patch is not a box on the lap`)
+  }
   const doors: ReadonlyArray<SwingDoor> = spec.doors.flatMap((s) => {
     const halfWidth = samples[Math.round(s / spacing) % count]?.halfWidth ?? spec.halfWidth
     // The left leaf points right across the road, the right leaf points left.
@@ -450,6 +466,8 @@ export const buildTrack = (spec: TrackSpec): TrackData => {
     props,
     bollards,
     doors,
+    bumps,
+    surfaces: spec.surfaces,
     bounds: { minX, maxX, minZ, maxZ, maxY }
   }
 }

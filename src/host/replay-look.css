@@ -1,0 +1,34 @@
+/*
+ * The look of the window while a lap is shown again (`replay-look.ts`): recorded footage,
+ * only round the edges. One layer over the canvas, under the panels.
+ */
+.tgp-replay-look {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 400ms ease;
+}
+/* Scan lines and a darker edge, both gone well before the middle of the window. */
+.tgp-replay-look::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(10, 14, 30, 0.2) 0 1px, transparent 1px 4px),
+    rgba(10, 14, 30, 0.2);
+  -webkit-mask-image: radial-gradient(ellipse 72% 72% at center, transparent 62%, #000 100%);
+  mask-image: radial-gradient(ellipse 72% 72% at center, transparent 62%, #000 100%);
+}
+/* The frame of a monitor, between the window's edge and the panels. */
+.tgp-replay-look::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+}
+.tgp-replay-look.tgp-replay-on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .tgp-replay-look { transition: none; }
+}

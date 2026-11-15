@@ -4,6 +4,8 @@
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import { nameMaxLength } from "../src/api/names.ts"
+import { handleWords, makeHandle } from "../src/host/handles.ts"
 import { foldName, judgeName } from "../src/server/names.ts"
 
 const verdict = (name: string): string => {
@@ -120,4 +122,39 @@ test("innocent words that contain a refused one pass", () => {
   ]) {
     assert.equal(verdict(name), "ok", name)
   }
+})
+
+test("every made-up name is one the server takes, and no two read the same", () => {
+  const folded = new Set<string>()
+  let fitting = 0
+  for (const how of handleWords.how) {
+    for (const who of handleWords.who) {
+      for (const does of handleWords.does) {
+        const handle = `${how} ${who} ${does}`
+        if (handle.length > nameMaxLength) continue
+        fitting++
+        const judged = judgeName(handle)
+        assert.ok(judged.ok, `${handle}: ${judged.ok ? "" : judged.reason}`)
+        folded.add(judged.folded)
+      }
+    }
+  }
+  assert.equal(folded.size, fitting, "two made-up names fold to the same name")
+  assert.ok(fitting > 150_000, `only ${fitting} names`)
+})
+
+test("a made-up name is three words that fit, whatever the dice", () => {
+  let seed = 7
+  const dice = (): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+  }
+  const seen = new Set<string>()
+  for (let i = 0; i < 2000; i++) {
+    const handle = makeHandle(dice)
+    assert.ok(handle.length <= nameMaxLength && handle.split(" ").length === 3, handle)
+    seen.add(handle)
+  }
+  assert.ok(seen.size > 1950, `${seen.size} different names in 2000`)
+  assert.equal(makeHandle(() => 0.999999), "Shy Otter Skids", "dice that never vary still give a name")
 })

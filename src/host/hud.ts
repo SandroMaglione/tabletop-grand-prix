@@ -1,15 +1,23 @@
 /**
- * The HUD: a few small dark panels drawn with Pixi 2D over the corners of the 3D view. The
- * map is the picture; the HUD stays out of its way.
+ * The HUD: a few small dark panels drawn with Pixi 2D over the corners of the 3D view, in
+ * the manner of a racing game's timing screens: a pale glassy rim, a hatched header, rows as
+ * bars, a state shown as a hatched band of colour. The map is the picture; the HUD stays out
+ * of its way.
  *
- * - top left: the timing panel. The track's name and the medals earned, the lap clock, the
- *   best lap (with the player's place on the board), the ghost being raced, one row per
- *   sector (the one being driven is lit; a finished one shows its gap to the ghost's split),
- *   and the next medal's time.
+ * - top left: the timing panel. Its header is the Typeonce plate, a link to typeonce.games
+ *   (`brand/plate.ts`; after a lap the brand wipes across the whole window, and behind it
+ *   the page cuts to the replay of the lap). The panel is away while the lap is shown again:
+ *   the lap is over, its time is on the result, and the board has the plate. Then
+ *   the lap clock and the medals earned, the best lap (with the player's place on the
+ *   board), the ghost being raced, the sectors as tabs (the one being driven is lit, a
+ *   finished one is edged green or red), the gap to the ghost at the last line crossed, and
+ *   the next medal's time.
  * - bottom right: the speed, with a bar.
- * - bottom left: the controls as key caps, only while the car is not racing.
- * - bottom centre: short messages ("press up to start", "off the road", a changed setting)
- *   and the result when a lap is done, with the board's answer when it was sent.
+ * - bottom centre: short messages ("off the road", a changed setting) and the result when a
+ *   lap is done, with the board's answer when it was sent.
+ * - top centre: `REPLAY`, while the lap just driven is shown again.
+ * - the middle of the map: how to start, only when the car has waited on the line for a
+ *   few seconds with nothing pressed. The controls are not otherwise explained.
  *
  * The leaderboard's own panels (the board, the name) are DOM over the top right corner:
  * `panels.ts`.
@@ -18,11 +26,12 @@
  * small windows. Text is drawn at the renderer's resolution.
  */
 import { Container, Graphics, Text, type TextStyleOptions } from "pixi.js"
-import type { RaceEvent, RaceView, TrackData } from "../sim/index.ts"
+import type { CarView, RaceEvent, RaceView, TrackData } from "../sim/index.ts"
 import type { Stage } from "./contract.ts"
 import type { LapGhost } from "./ghost.ts"
 import type { FinishResult } from "./laps.ts"
 import type { PostState } from "./online.ts"
+import { createBrandPlate } from "./brand/plate.ts"
 import { palette } from "./palette.ts"
 
 /** What the HUD shows about laps, ghosts and the board. */
@@ -39,13 +48,17 @@ export interface HudSource {
   post(): { readonly attempt: number; readonly state: PostState } | null
   /** A leaderboard is configured. */
   online(): boolean
+  /** The player's name on the board, when they have one. */
+  name(): string | null
 }
 
 export interface HudState {
-  readonly variant: string
-  readonly muted: boolean
-  /** Which buttons to name: the gamepad's when it was the last device used. */
+  /** Which buttons the start prompt names: the gamepad's when it was the last device used. */
   readonly pad: "none" | "keyboard" | "gamepad" | "buttons-only"
+  /** The car on screen: the player's, or the replay's while the lap is shown again. */
+  readonly car: CarView
+  /** The lap just driven is being shown again. */
+  readonly replay: boolean
 }
 
 export interface Hud {
@@ -57,8 +70,8 @@ export interface Hud {
 
 /** Numbers: monospaced, so a running clock does not shake. Then the system's own if the web font did not load. */
 export const hudFont = ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"]
-/** Labels: a condensed sans, always in capitals. */
-export const hudLabelFont = ["Barlow Condensed", "Arial Narrow", "Helvetica Neue", "Arial", "sans-serif"]
+/** Labels: a wide, squared sans, always in capitals. */
+export const hudLabelFont = ["Chakra Petch", "Eurostile", "Helvetica Neue", "Arial", "sans-serif"]
 
 /** `m:ss.mmm`. */
 export const formatTime = (ms: number): string => {
@@ -72,19 +85,13 @@ export const formatTime = (ms: number): string => {
 /** A gap in seconds with a sign: `+0.123` behind, `−0.123` ahead. */
 export const formatGap = (ms: number): string => `${ms <= 0 ? "−" : "+"}${(Math.abs(ms) / 1000).toFixed(3)}`
 
-/** A handling variant in the player's words. */
-export const steeringName = (variant: string): string => (variant === "car" ? "like a car" : variant === "screen" ? "point where to go" : variant)
-
-/** The same in a word, for the key caps. */
-const steeringShort = (variant: string): string => (variant === "car" ? "car" : variant === "screen" ? "point" : variant)
-
-/** The board's answer to a lap, in a few words; null when there is nothing to say. */
-export const postLine = (state: PostState): { readonly text: string; readonly tone: "accent" | "dim" | "bad" } => {
+/** The board's answer to a lap, in a few words. `name` is what the player is called on the board, so a made-up name is seen at once. */
+export const postLine = (state: PostState, name: string | null): { readonly text: string; readonly tone: "accent" | "dim" | "bad" } => {
   switch (state.kind) {
     case "sending":
       return { text: "SENDING TO THE BOARD…", tone: "dim" }
     case "sent":
-      return { text: `#${state.rank} OF ${state.total}`, tone: "accent" }
+      return { text: name === null ? `#${state.rank} OF ${state.total}` : `#${state.rank} OF ${state.total} · ${name.toUpperCase()}`, tone: "accent" }
     case "waiting":
       return { text: "SAVED · SENDS WHEN ONLINE", tone: "dim" }
     case "unlisted":
@@ -95,10 +102,12 @@ export const postLine = (state: PostState): { readonly text: string; readonly to
 }
 
 const margin = 12
-const radius = 5
+const radius = 9
+/** The pale rim of every panel. */
+const rim = 3
 
-const number = (size: number, fill: number, weight: "400" | "500" = "500"): TextStyleOptions => ({ fontFamily: hudFont, fontSize: size, fontWeight: weight, fill })
-const label = (size: number, fill: number): TextStyleOptions => ({ fontFamily: hudLabelFont, fontSize: size, fontWeight: "600", fill, letterSpacing: 1 })
+const number = (size: number, fill: number, weight: "400" | "500" | "700" = "500"): TextStyleOptions => ({ fontFamily: hudFont, fontSize: size, fontWeight: weight, fill })
+const label = (size: number, fill: number): TextStyleOptions => ({ fontFamily: hudLabelFont, fontSize: size, fontWeight: "600", fill, letterSpacing: 0.6 })
 
 const text = (parent: Container, value: string, options: TextStyleOptions): Text => {
   const t = new Text({ text: value, style: options })
@@ -106,137 +115,163 @@ const text = (parent: Container, value: string, options: TextStyleOptions): Text
   return t
 }
 
-/** A dark panel the map shows through a little. */
+/** How much of the map shows through a panel. */
+export const panelAlpha = 0.6
+
+/** How long the car waits on the line with nothing pressed before the HUD says how to start, seconds. */
+const promptAfter = 5
+
+/** A dark panel the map shows through, inside a pale glassy rim. */
 const drawPanel = (g: Graphics, width: number, height: number): void => {
   g.clear()
-  g.roundRect(0, 0, width, height, radius).fill({ color: palette.hudBack, alpha: 0.88 })
-  g.roundRect(0.5, 0.5, width - 1, height - 1, radius).stroke({ color: palette.hudText, alpha: 0.1, width: 1 })
+  g.roundRect(0, 0, width, height, radius).fill({ color: palette.hudBack, alpha: panelAlpha })
+  g.roundRect(rim / 2, rim / 2, width - rim, height - rim, radius - rim / 2).stroke({ color: palette.hudText, alpha: 0.24, width: rim })
+}
+
+/** Diagonal stripes over a `width` by `height` box at the origin. The caller masks them to the box. */
+const drawHatch = (g: Graphics, width: number, height: number, colour: number, alpha: number): void => {
+  const stripe = 5
+  const gap = 9
+  for (let x = -height; x < width; x += stripe + gap) {
+    g.poly([x, height, x + stripe, height, x + stripe + height, 0, x + height, 0]).fill({ color: colour, alpha })
+  }
+}
+
+/** A band of colour with stripes, masked to its box: a state, the way a timing screen shows one. */
+const makeBand = (parent: Container, x: number, y: number, width: number, height: number) => {
+  const band = new Graphics()
+  band.position.set(x, y)
+  const mask = new Graphics()
+  mask.rect(0, 0, width, height).fill(0xffffff)
+  mask.position.set(x, y)
+  parent.addChild(band, mask)
+  band.mask = mask
+  return {
+    /** Paints the band, or clears it with a null colour. */
+    paint(colour: number | null): void {
+      band.clear()
+      if (colour === null) return
+      band.rect(0, 0, width, height).fill({ color: colour, alpha: 0.82 })
+      drawHatch(band, width, height, 0xffffff, 0.13)
+    }
+  }
 }
 
 const medalNames = ["bronze", "silver", "gold"] as const
 const medalColour = { bronze: palette.bronze, silver: palette.silver, gold: palette.gold } as const
 
-/** A key cap and what the key does. */
-type Hint = readonly [cap: string, does: string]
-
-export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hud => {
+/**
+ * `covered` is called after a finished lap, at the moment the brand's wipe hides the whole
+ * window: the page changes what is behind it then.
+ */
+export const createHud = (stage: Stage, track: TrackData, source: HudSource, covered: () => void): Hud => {
   const root = new Container()
   stage.app.stage.addChild(root)
   const sectorCount = Math.max(1, track.checkpoints.length)
 
   // ── top left: the timing panel ─────────────────────────────────────────
-  const towerW = 188
-  const pad = 10
-  const headH = 24
-  const clockH = 42
-  const rowH = 23
-  const towerH = headH + clockH + rowH * (sectorCount + 3)
+  /** Wide enough for the longest name (16 letters) beside the ghost's time. */
+  const towerW = 268
+  const pad = 14
+  /** The header is the Typeonce plate, a DOM link laid over this space. */
+  const headH = 40
+  const clockH = 54
+  const rowH = 31
+  const tabsH = 24
+  const deltaH = 38
+  const clockY = headH
+  const bestY = clockY + clockH
+  const ghostY = bestY + rowH
+  const tabsY = ghostY + rowH
+  const deltaY = tabsY + tabsH
+  const targetY = deltaY + deltaH
+  const towerH = targetY + rowH + rim
+  const inner = towerW - rim * 2
   const tower = new Container()
   const towerBg = new Graphics()
   tower.addChild(towerBg)
   drawPanel(towerBg, towerW, towerH)
-  // The header: a darker band, the accent tick, the track's name, the medals earned.
-  towerBg.roundRect(0, 0, towerW, headH + radius, radius).fill({ color: palette.hudHead, alpha: 0.9 })
-  towerBg.rect(0, headH, towerW, radius).fill({ color: palette.hudBack })
-  towerBg.rect(pad, 7, 3, headH - 14).fill({ color: palette.hudAccent })
-  const title = text(tower, track.name.toUpperCase(), label(12, palette.hudText))
-  title.anchor.set(0, 0.5)
-  title.position.set(pad + 9, headH / 2)
+  const clockText = text(tower, "0:00.000", number(28, palette.hudText))
+  clockText.anchor.set(0, 0.5)
+  clockText.position.set(pad, clockY + clockH / 2)
+  // The medals earned, beside the clock.
   const medals = medalNames.map((name, i) => {
     const dot = new Graphics()
-    dot.position.set(towerW - pad - 5 - (2 - i) * 13, headH / 2)
+    dot.position.set(towerW - pad - 5 - (2 - i) * 14, clockY + clockH / 2)
     tower.addChild(dot)
     return { name, dot, earned: null as boolean | null }
   })
-  const clockText = text(tower, "0:00.000", number(27, palette.hudText))
-  clockText.anchor.set(0, 0.5)
-  clockText.position.set(pad, headH + clockH / 2)
 
-  /** A line of the panel: a label on the left, a value on the right, and a band behind them that can light up. */
-  const makeRow = (index: number, name: string) => {
-    const y = headH + clockH + index * rowH
-    const band = new Graphics()
-    band.position.set(0, y)
-    tower.addChild(band)
-    towerBg.rect(pad, y, towerW - pad * 2, 1).fill({ color: palette.hudText, alpha: 0.09 })
+  /** A line of the panel: a darker bar with a label on the left and a value on the right. */
+  const makeRow = (y: number, name: string) => {
+    towerBg.rect(rim, y + 1, inner, rowH - 2).fill({ color: palette.hudHead, alpha: 0.42 })
     const nameText = text(tower, name, label(12, palette.hudDim))
     nameText.anchor.set(0, 0.5)
     nameText.position.set(pad, y + rowH / 2)
     const value = text(tower, "", number(13, palette.hudText))
     value.anchor.set(1, 0.5)
     value.position.set(towerW - pad, y + rowH / 2)
-    return { band, name: nameText, value, key: "" }
+    return { name: nameText, value, key: "" }
   }
-  const bestRow = makeRow(0, "BEST")
+  const bestRow = makeRow(bestY, "BEST")
   const rankText = text(tower, "", number(11, palette.hudDim, "400"))
   rankText.anchor.set(1, 0.5)
-  rankText.position.set(towerW - pad - 70, headH + clockH + rowH / 2)
+  rankText.position.set(towerW - pad - 74, bestY + rowH / 2)
   // The ghost being raced: its driver and time, with a dot in the ghost's colour.
-  const ghostRow = makeRow(1, "")
+  const ghostRow = makeRow(ghostY, "")
   const ghostDot = new Graphics()
-  ghostDot.position.set(pad + 5, headH + clockH + rowH + rowH / 2)
+  ghostDot.position.set(pad + 5, ghostY + rowH / 2)
   tower.addChild(ghostDot)
-  ghostRow.name.position.x = pad + 15
-  const sectorRows = Array.from({ length: sectorCount }, (_, i) => makeRow(2 + i, `S${i + 1}`))
-  const targetRow = makeRow(2 + sectorCount, "")
+  ghostRow.name.position.x = pad + 16
+
+  // The sectors as tabs, and under them the gap to the ghost at the last line crossed.
+  const tabW = inner / sectorCount
+  const tabs = Array.from({ length: sectorCount }, (_, i) => {
+    const cell = new Graphics()
+    cell.position.set(rim + i * tabW, tabsY)
+    tower.addChild(cell)
+    const name = text(tower, `S${i + 1}`, label(11, palette.hudDim))
+    name.anchor.set(0.5, 0.5)
+    name.position.set(rim + (i + 0.5) * tabW, tabsY + tabsH / 2)
+    return { cell, name, key: "" }
+  })
+  const deltaBand = makeBand(tower, rim, deltaY, inner, deltaH)
+  const deltaName = text(tower, "DELTA", label(12, palette.hudDim))
+  deltaName.anchor.set(0, 0.5)
+  deltaName.position.set(pad, deltaY + deltaH / 2)
+  const deltaValue = text(tower, "", number(16, palette.hudText, "700"))
+  deltaValue.anchor.set(1, 0.5)
+  deltaValue.position.set(towerW - pad, deltaY + deltaH / 2)
+  let deltaKey = ""
+
+  const targetRow = makeRow(targetY, "")
   const targetDot = new Graphics()
-  targetDot.position.set(pad + 5, headH + clockH + (2 + sectorCount) * rowH + rowH / 2)
+  targetDot.position.set(pad + 5, targetY + rowH / 2)
   tower.addChild(targetDot)
-  targetRow.name.position.x = pad + 15
+  targetRow.name.position.x = pad + 16
   root.addChild(tower)
 
   // ── bottom right: speed ───────────────────────────────────────────────
-  const speedW = 128
-  const speedH = 50
+  const speedW = 150
+  const speedH = 66
   const speedPanel = new Container()
   const speedBg = new Graphics()
   speedPanel.addChild(speedBg)
   drawPanel(speedBg, speedW, speedH)
-  const speedText = text(speedPanel, "0", number(22, palette.hudText))
+  const speedText = text(speedPanel, "0", number(24, palette.hudText))
   speedText.anchor.set(1, 0.5)
-  speedText.position.set(speedW - pad - 36, 20)
+  speedText.position.set(speedW - pad - 44, 27)
   const unitText = text(speedPanel, "KM/H", label(11, palette.hudDim))
   unitText.anchor.set(1, 0.5)
-  unitText.position.set(speedW - pad, 22)
+  unitText.position.set(speedW - pad, 29)
   const speedBar = new Graphics()
-  speedBar.position.set(pad, speedH - 12)
+  speedBar.position.set(pad, speedH - 17)
   speedPanel.addChild(speedBar)
   root.addChild(speedPanel)
   let speedKey = ""
 
-  // ── bottom left: the controls as key caps ──────────────────────────────
-  const hintsH = 30
-  const hintsPanel = new Container()
-  const hintsBg = new Graphics()
-  hintsPanel.addChild(hintsBg)
-  const hintsRow = new Container()
-  hintsPanel.addChild(hintsRow)
-  root.addChild(hintsPanel)
-  let hintsKey = ""
-
-  const drawHints = (hints: ReadonlyArray<Hint>): void => {
-    for (const child of hintsRow.removeChildren()) child.destroy()
-    let x = pad
-    for (const [cap, does] of hints) {
-      const capText = new Text({ text: cap, style: number(11, palette.hudText) })
-      const capW = Math.max(20, Math.ceil(capText.width) + 10)
-      const box = new Graphics()
-      box.roundRect(x + 0.5, 6.5, capW - 1, hintsH - 13, 4).fill({ color: palette.hudText, alpha: 0.1 }).stroke({ color: palette.hudText, alpha: 0.35, width: 1 })
-      hintsRow.addChild(box)
-      capText.anchor.set(0.5, 0.5)
-      capText.position.set(x + capW / 2, hintsH / 2)
-      hintsRow.addChild(capText)
-      x += capW + 5
-      const doesText = text(hintsRow, does.toUpperCase(), label(11, palette.hudDim))
-      doesText.anchor.set(0, 0.5)
-      doesText.position.set(x, hintsH / 2)
-      x += Math.ceil(doesText.width) + 12
-    }
-    drawPanel(hintsBg, x - 12 + pad, hintsH)
-  }
-
   // ── bottom centre: messages ────────────────────────────────────────────
-  const messageH = 30
+  const messageH = 40
   const message = new Container()
   const messageBg = new Graphics()
   message.addChild(messageBg)
@@ -247,33 +282,150 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
   let messageKey = ""
 
   // ── bottom centre: the result ──────────────────────────────────────────
-  const resultW = 270
-  const resultH = 62
-  const resultBoardH = 20
+  // The gap to the best lap on a band of its colour, the medal under it, the board's answer last.
+  const resultW = 340
+  const resultGapH = 40
+  const resultH = resultGapH + 38
+  const resultBoardH = 28
   const result = new Container()
   const resultBg = new Graphics()
   result.addChild(resultBg)
-  drawPanel(resultBg, resultW, resultH)
-  resultBg.rect(0, 8, 3, resultH - 16).fill({ color: palette.hudAccent })
   resultBg.position.set(-resultW / 2, 0)
-  const resultGap = text(result, "", number(14, palette.hudText))
+  const resultBand = makeBand(result, -resultW / 2 + rim, rim, resultW - rim * 2, resultGapH - rim)
+  const resultGap = text(result, "", number(16, palette.hudText, "700"))
   resultGap.anchor.set(0.5, 0.5)
-  resultGap.position.set(0, 20)
+  resultGap.position.set(0, resultGapH / 2 + 1)
   const resultMedalDot = new Graphics()
   result.addChild(resultMedalDot)
   const resultMedal = text(result, "", label(12, palette.hudText))
   resultMedal.anchor.set(0.5, 0.5)
-  resultMedal.position.set(0, 43)
+  resultMedal.position.set(0, resultGapH + 18)
   const resultBoard = text(result, "", label(12, palette.hudAccent))
   resultBoard.anchor.set(0.5, 0.5)
-  resultBoard.position.set(0, resultH + 4)
-  let resultBoardKey = ""
+  resultBoard.position.set(0, resultH + 9)
+  let resultBoardKey = "unset"
   result.visible = false
   root.addChild(result)
   let resultAttempt = -1
 
+  // ── top centre: the lap is being shown again ───────────────────────────
+  // The panel is as wide as its dot and its word, with the same space at both ends.
+  const replayH = 34
+  const replayPad = 15
+  const replayTag = new Container()
+  const replayBg = new Graphics()
+  replayTag.addChild(replayBg)
+  const replayDot = new Graphics()
+  replayDot.circle(0, 0, 5).fill(palette.hudBad)
+  replayTag.addChild(replayDot)
+  const replayText = text(replayTag, "REPLAY", label(13, palette.hudText))
+  replayText.anchor.set(0, 0.5)
+  const replayW = Math.ceil(replayPad + 10 + 9 + replayText.width + replayPad)
+  drawPanel(replayBg, replayW, replayH)
+  replayBg.position.set(-replayW / 2, 0)
+  replayDot.position.set(-replayW / 2 + replayPad + 5, replayH / 2)
+  replayText.position.set(-replayW / 2 + replayPad + 10 + 9, replayH / 2)
+  replayTag.visible = false
+  root.addChild(replayTag)
+
+  // ── the middle of the map: how to start ────────────────────────────────
+  // The arrow keys as they sit on a keyboard, raised like real keys, and the one that goes
+  // being pressed over and over; three words under them.
+  const prompt = new Container()
+  const promptBg = new Graphics()
+  prompt.addChild(promptBg)
+  const keySize = 52
+  const keyDepth = 9
+  const keyGap = 8
+  const promptW = keySize * 3 + keyGap * 2 + 72
+  const promptH = (keySize + keyDepth) * 2 + keyGap + 96
+  drawPanel(promptBg, promptW, promptH)
+  promptBg.position.set(-promptW / 2, -promptH / 2)
+  const keysTop = -promptH / 2 + 30
+  const keys = (["up", "left", "down", "right"] as const).map((name) => {
+    const column = name === "left" ? -1 : name === "right" ? 1 : 0
+    const row = name === "up" ? 0 : 1
+    const x = column * (keySize + keyGap) - keySize / 2
+    const y = keysTop + row * (keySize + keyDepth + keyGap)
+    const cap = new Graphics()
+    cap.position.set(x, y)
+    prompt.addChild(cap)
+    const arrow = text(prompt, name === "up" ? "↑" : name === "left" ? "←" : name === "down" ? "↓" : "→", number(22, palette.hudText, "700"))
+    arrow.anchor.set(0.5, 0.5)
+    arrow.position.set(x + keySize / 2, y + keySize / 2)
+    return { name, cap, arrow, y }
+  })
+  // On a gamepad the one thing to press is the right trigger.
+  const triggerW = 84
+  const trigger = new Graphics()
+  trigger.position.set(-triggerW / 2, keysTop + 26)
+  prompt.addChild(trigger)
+  const triggerText = text(prompt, "RT", number(22, palette.hudBack, "700"))
+  triggerText.anchor.set(0.5, 0.5)
+  const promptText = text(prompt, "", label(15, palette.hudText))
+  promptText.anchor.set(0.5, 0.5)
+  promptText.position.set(0, promptH / 2 - 30)
+  prompt.alpha = 0
+  prompt.visible = false
+  root.addChild(prompt)
+  let promptKey = ""
+  /** Seconds the car has waited on the line with nothing pressed. */
+  let waited = 0
+
+  /**
+   * One key seen a little from above: its skirt, its face `down` pixels into it, a soft
+   * shine on the face's upper half. `lit` is the key that goes.
+   */
+  const drawKey = (g: Graphics, width: number, down: number, lit: boolean): void => {
+    const face = lit ? palette.hudAccent : 0x3a4160
+    const skirt = lit ? 0x9c8410 : 0x161a2c
+    g.clear()
+    // The shadow the key throws on the panel shrinks as it goes down.
+    g.roundRect(2, keyDepth + 3, width - 4, keySize, 10).fill({ color: 0x000000, alpha: 0.28 - 0.02 * down })
+    g.roundRect(0, keyDepth, width, keySize, 10).fill({ color: skirt })
+    g.roundRect(0, down, width, keySize, 10).fill({ color: face })
+    g.roundRect(0.75, down + 0.75, width - 1.5, keySize - 1.5, 9.5).stroke({ color: 0xffffff, alpha: lit ? 0.5 : 0.22, width: 1.5 })
+    g.roundRect(5, down + 5, width - 10, keySize * 0.42, 6).fill({ color: 0xffffff, alpha: lit ? 0.22 : 0.07 })
+  }
+
+  /** Draws the prompt for the device in use; `press` (0 to 1) is how far down the key that goes is. */
+  const drawPrompt = (onPad: boolean, press: number): void => {
+    const key = `${onPad}`
+    if (key !== promptKey) {
+      promptKey = key
+      for (const one of keys) {
+        one.cap.visible = !onPad
+        one.arrow.visible = !onPad
+      }
+      trigger.visible = onPad
+      triggerText.visible = onPad
+      promptText.text = onPad ? "PULL RT TO GO" : "PRESS ↑ TO GO"
+    }
+    const down = Math.round(press * (keyDepth - 2) * 2) / 2
+    if (onPad) {
+      drawKey(trigger, triggerW, down, true)
+      triggerText.position.set(0, keysTop + 26 + down + keySize / 2)
+      return
+    }
+    for (const one of keys) {
+      const lit = one.name === "up"
+      drawKey(one.cap, keySize, lit ? down : 0, lit)
+      one.arrow.style.fill = lit ? palette.hudBack : palette.hudText
+      one.arrow.position.y = one.y + (lit ? down : 0) + keySize / 2
+    }
+  }
+
+  /** How far down the key is at `seconds` into its cycle: a quick press, held a moment, let go, a wait. */
+  const pressAt = (seconds: number): number => {
+    const t = seconds % 1.5
+    if (t < 0.12) return t / 0.12
+    if (t < 0.42) return 1
+    if (t < 0.56) return 1 - (t - 0.42) / 0.14
+    return 0
+  }
+
   // ── state the panels read ─────────────────────────────────────────────
-  /** The ghost's splits (or the best lap's, with no ghost) at the start of this attempt: the rows compare against these, even after this lap beats it. */
+  /** The ghost's splits (or the best lap's, with no ghost) at the start of this attempt: the gaps are against these, even after this lap beats it. */
   let reference: ReadonlyArray<number> | null = null
   let attempt = -1
   /** Seconds since the page began, for timed messages. */
@@ -288,35 +440,59 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
     reference = source.ghost()?.splitsMs ?? source.best()?.splitsMs ?? null
   }
 
+  // The maker's plate is the timing panel's header, like the series' mark on a timing screen.
+  const plate = createBrandPlate(document)
+
   const layout = (): void => {
     const { width, height } = stage.app.screen
     const scale = Math.max(0.72, Math.min(1, width / 1500, height / 840))
-    for (const panel of [tower, speedPanel, hintsPanel, message, result]) panel.scale.set(scale)
+    for (const panel of [tower, speedPanel, message, result, prompt, replayTag]) panel.scale.set(scale)
     tower.position.set(margin, margin)
+    plate.place(margin + rim * scale, margin + rim * scale, inner, headH - rim, scale)
     speedPanel.position.set(width - margin - speedW * scale, height - margin - speedH * scale)
-    hintsPanel.position.set(margin, height - margin - hintsH * scale)
+    prompt.position.set(width / 2, height / 2)
+    replayTag.position.set(width / 2, margin)
     message.position.set(width / 2, height - margin - messageH * scale)
-    result.position.set(width / 2, height - margin - (resultH + (resultBoardKey === "" ? 0 : resultBoardH)) * scale)
+    result.position.set(width / 2, height - margin - (resultH + (resultBoardKey === "" || resultBoardKey === "unset" ? 0 : resultBoardH)) * scale)
   }
   layout()
   stage.app.renderer.on("resize", layout)
 
-  const drawSector = (i: number, split: number | null, current: boolean): void => {
-    const row = sectorRows[i]
-    if (row === undefined) return
+  /** The gap at line `i` against the reference, or null when either is missing. */
+  const gapAt = (i: number, split: number | null): number | null => {
     const best = reference?.[i]
-    const gap = split !== null && best !== undefined ? split - best : null
+    return split !== null && best !== undefined ? split - best : null
+  }
+
+  const drawTab = (i: number, split: number | null, current: boolean): void => {
+    const tab = tabs[i]
+    if (tab === undefined) return
+    const gap = gapAt(i, split)
     const state = split === null ? (current ? "current" : "empty") : gap === null ? "plain" : gap <= 0 ? "ahead" : "behind"
-    const key = `${state}:${split ?? ""}`
-    if (key === row.key) return
-    row.key = key
-    row.band.clear()
+    if (state === tab.key) return
+    tab.key = state
+    tab.cell.clear()
     // The sector being driven is lit, like the leader's line on a timing screen.
-    if (state === "current") row.band.rect(0, 0, towerW, rowH).fill({ color: palette.hudText, alpha: 0.94 })
-    else if (state === "ahead" || state === "behind") row.band.rect(0, 0, 3, rowH).fill({ color: state === "ahead" ? palette.hudGood : palette.hudBad })
-    row.name.style.fill = state === "current" ? palette.hudBack : palette.hudDim
-    row.value.text = split === null ? (state === "current" ? "" : "–") : gap === null ? formatTime(split).replace(/^0:/, "") : formatGap(gap)
-    row.value.style.fill = state === "ahead" ? palette.hudGood : state === "behind" ? palette.hudBad : state === "empty" ? palette.hudDim : palette.hudText
+    tab.cell.rect(1, 0, tabW - 2, tabsH).fill(state === "current" ? { color: palette.hudText, alpha: 0.94 } : { color: palette.hudText, alpha: 0.09 })
+    if (state === "ahead" || state === "behind" || state === "plain") {
+      tab.cell.rect(1, tabsH - 3, tabW - 2, 3).fill({ color: state === "ahead" ? palette.hudGood : state === "behind" ? palette.hudBad : palette.hudText, alpha: state === "plain" ? 0.5 : 1 })
+    }
+    tab.name.style.fill = state === "current" ? palette.hudBack : state === "empty" ? palette.hudDim : palette.hudText
+  }
+
+  /** The gap at the last line crossed, on a band of its colour; with nothing to compare against, the time at that line. */
+  const drawDelta = (splits: ReadonlyArray<number>): void => {
+    const last = splits.length - 1
+    const split = splits[last] ?? null
+    const gap = gapAt(last, split)
+    const key = `${last}:${split ?? ""}:${gap ?? ""}`
+    if (key === deltaKey) return
+    deltaKey = key
+    deltaBand.paint(gap === null ? null : gap <= 0 ? palette.hudGoodDeep : palette.hudBadDeep)
+    deltaName.text = gap === null && split !== null ? `S${last + 1}` : "DELTA"
+    deltaName.style.fill = gap === null ? palette.hudDim : palette.hudText
+    deltaValue.text = split === null ? "–" : gap === null ? formatTime(split).replace(/^0:/, "") : formatGap(gap)
+    deltaValue.style.fill = split === null ? palette.hudDim : palette.hudText
   }
 
   const drawMedals = (): void => {
@@ -326,8 +502,8 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
       if (earned === medal.earned) continue
       medal.earned = earned
       medal.dot.clear()
-      if (earned) medal.dot.circle(0, 0, 4.5).fill(medalColour[medal.name])
-      else medal.dot.circle(0, 0, 4).stroke({ color: medalColour[medal.name], alpha: 0.7, width: 1.2 })
+      if (earned) medal.dot.circle(0, 0, 5).fill(medalColour[medal.name])
+      else medal.dot.circle(0, 0, 4.5).stroke({ color: medalColour[medal.name], alpha: 0.8, width: 1.4 })
     }
     // The next medal to earn, or the last one once all are earned.
     const next = medalNames.find((name) => best === null || best > track.medals[name]) ?? null
@@ -335,7 +511,7 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
     if (key === targetRow.key) return
     targetRow.key = key
     targetDot.clear()
-    targetDot.circle(0, 0, 4.5).fill(medalColour[next ?? "gold"])
+    targetDot.circle(0, 0, 5).fill(medalColour[next ?? "gold"])
     targetRow.name.text = next === null ? "ALL MEDALS" : next.toUpperCase()
     targetRow.value.text = next === null ? "" : formatTime(track.medals[next])
   }
@@ -345,27 +521,24 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
     if (value === messageKey) return
     messageKey = value
     messageText.text = value.toUpperCase()
-    const w = Math.ceil(messageText.width) + 30
+    const w = Math.ceil(messageText.width) + 40
     drawPanel(messageBg, w, messageH)
-    messageBg.rect(0, 8, 3, messageH - 16).fill({ color: palette.hudAccent })
     messageBg.position.set(-w / 2, 0)
   }
 
   /** The board's answer under the result, when there is one for this lap. */
   const drawResultBoard = (attempt: number): void => {
     const post = source.post()
-    const line = post !== null && post.attempt === attempt ? postLine(post.state) : null
+    const line = post !== null && post.attempt === attempt ? postLine(post.state, source.name()) : null
     const key = line === null ? "" : `${line.tone}:${line.text}`
     if (key === resultBoardKey) return
     resultBoardKey = key
-    resultBg.clear()
     const h = resultH + (line === null ? 0 : resultBoardH)
     drawPanel(resultBg, resultW, h)
-    resultBg.rect(0, 8, 3, h - 16).fill({ color: palette.hudAccent })
-    if (line !== null) resultBg.rect(14, resultH - 6, resultW - 28, 1).fill({ color: palette.hudText, alpha: 0.09 })
+    if (line !== null) resultBg.rect(rim, resultH, resultW - rim * 2, resultBoardH - rim).fill({ color: palette.hudHead, alpha: 0.42 })
     resultBoard.text = line?.text ?? ""
     resultBoard.style.fill = line === null ? palette.hudDim : line.tone === "accent" ? palette.hudAccent : line.tone === "bad" ? palette.hudBad : palette.hudDim
-    resultBoard.position.y = resultH + 4
+    resultBoard.position.y = resultH + (resultBoardH - rim) / 2
     layout()
   }
 
@@ -373,13 +546,15 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
     const finish = source.lastFinish()
     if (finish === null) return
     resultAttempt = view.lap.attempt
+    // The lap's time first: the timing panel is away while the lap is shown again.
+    const time = formatTime(finish.timeMs)
     if (finish.previous === null) {
-      resultGap.text = "FIRST LAP"
-      resultGap.style.fill = palette.hudGood
+      resultGap.text = `${time}  FIRST LAP`
+      resultBand.paint(palette.hudGoodDeep)
     } else {
       const gap = finish.timeMs - finish.previous.timeMs
-      resultGap.text = finish.improved ? `${formatGap(gap)} NEW BEST` : `${formatGap(gap)} TO BEST`
-      resultGap.style.fill = finish.improved ? palette.hudGood : palette.hudBad
+      resultGap.text = finish.improved ? `${time}  ${formatGap(gap)} NEW BEST` : `${time}  ${formatGap(gap)} TO BEST`
+      resultBand.paint(finish.improved ? palette.hudGoodDeep : palette.hudBadDeep)
     }
     const won = [...medalNames].reverse().find((name) => finish.timeMs <= track.medals[name])
     resultMedalDot.clear()
@@ -392,7 +567,7 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
       resultMedal.style.fill = palette.hudText
       resultMedal.position.x = 8
       resultMedalDot.circle(0, 0, 5).fill(medalColour[won])
-      resultMedalDot.position.set(-resultMedal.width / 2, 43)
+      resultMedalDot.position.set(-resultMedal.width / 2, resultGapH + 18)
     }
   }
 
@@ -406,10 +581,12 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
           break
         case "reset":
           if (event.reason === "off-track") offRoadUntil = now + 1.4
+          plate.cancel()
           break
         case "finish":
           showResult(view)
           finishShownUntil = now + 5
+          plate.wipe(covered)
           break
         default:
           break
@@ -445,68 +622,55 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource): Hu
       if (ghostKey !== ghostRow.key) {
         ghostRow.key = ghostKey
         ghostDot.clear()
-        if (lapGhost !== null) ghostDot.circle(0, 0, 4.5).fill(palette.ghost)
-        else ghostDot.circle(0, 0, 4).stroke({ color: palette.ghost, alpha: 0.7, width: 1.2 })
-        const name = lapGhost === null ? "NO GHOST" : lapGhost.kind === "own" ? "GHOST: YOUR BEST" : lapGhost.name.toUpperCase()
-        ghostRow.name.text = name.length > 17 ? `${name.slice(0, 16)}…` : name
+        if (lapGhost !== null) ghostDot.circle(0, 0, 5).fill(palette.ghost)
+        else ghostDot.circle(0, 0, 4.5).stroke({ color: palette.ghost, alpha: 0.8, width: 1.4 })
+        const name = lapGhost === null ? "NO GHOST" : lapGhost.kind === "own" ? "YOUR BEST" : lapGhost.name.toUpperCase()
+        ghostRow.name.text = name
         ghostRow.name.style.fill = lapGhost?.kind === "rival" ? palette.hudText : palette.hudDim
         ghostRow.value.text = loading ? "…" : lapGhost?.kind === "rival" ? formatTime(lapGhost.timeMs) : ""
         ghostRow.value.style.fill = palette.hudText
       }
-      for (let i = 0; i < sectorCount; i++) {
-        let split = lap.splitsMs[i] ?? null
-        // A finished lap whose splits leave out the last line still fills the last sector.
-        if (split === null && lap.phase === "finished" && i === sectorCount - 1) split = lap.timeMs
-        drawSector(i, lap.phase === "ready" ? null : split, lap.phase === "running" && i === lap.splitsMs.length)
-      }
+      // A finished lap whose splits leave out the last line still fills the last sector.
+      const splits = lap.phase === "ready" ? [] : lap.phase === "finished" && lap.splitsMs.length < sectorCount ? [...lap.splitsMs, lap.timeMs] : lap.splitsMs
+      for (let i = 0; i < sectorCount; i++) drawTab(i, splits[i] ?? null, lap.phase === "running" && i === lap.splitsMs.length)
+      drawDelta(splits)
       drawMedals()
 
-      // The controls show while the car is not racing; a lap needs the whole map.
-      const screen = state.variant.startsWith("screen")
-      const steering: Hint = [state.pad === "gamepad" ? "SELECT" : "V", `steering: ${steeringShort(state.variant)}`]
-      const hints: ReadonlyArray<Hint> =
-        state.pad === "gamepad"
-          ? screen
-            ? [["L", "point"], ["LT", "brake"], ["Y", "restart"], steering]
-            : [["RT", "gas"], ["LT", "brake"], ["L", "steer"], ["Y", "restart"], steering]
-          : state.pad === "buttons-only"
-            ? [["A", "gas"], ["B", "brake"], ["D-PAD", "steer"], ["Y", "restart"], steering]
-            : screen
-              ? [["↑ ↓ ← →", "point"], ["SPACE", "brake"], ["R", "restart"], steering]
-              : [["↑", "gas"], ["← →", "steer"], ["SPACE", "brake"], ["R", "restart"], steering]
-      const withBoard: ReadonlyArray<Hint> = source.online() && state.pad !== "gamepad" ? [...hints, ["L", "board"]] : hints
-      const withSound: ReadonlyArray<Hint> = state.muted ? [...withBoard, [state.pad === "gamepad" ? "L3" : "M", "sound off"]] : withBoard
-      const nextHints = withSound.map((hint) => hint.join(":")).join("|")
-      if (nextHints !== hintsKey) {
-        hintsKey = nextHints
-        drawHints(withSound)
-      }
-      const hintsTarget = lap.phase === "running" ? 0 : 1
-      hintsPanel.alpha += (hintsTarget - hintsPanel.alpha) * Math.min(1, seconds * 8)
-      hintsPanel.visible = hintsPanel.alpha > 0.02
+      // How to start, once the car has waited on the line long enough to show the player is lost.
+      waited = lap.phase === "ready" ? waited + seconds : 0
+      const prompting = waited >= promptAfter
+      prompt.alpha += ((prompting ? 1 : 0) - prompt.alpha) * Math.min(1, seconds * (prompting ? 6 : 14))
+      prompt.visible = prompt.alpha > 0.02
+      if (prompt.visible) drawPrompt(state.pad === "gamepad", pressAt(Math.max(0, waited - promptAfter)))
 
       // The speed, and a bar that fills to the boosted top speed.
-      const kmh = Math.round(Math.abs(view.car.speed) * 3.6)
-      const nextSpeed = `${kmh}:${view.car.boosting}`
+      const kmh = Math.round(Math.abs(state.car.speed) * 3.6)
+      const nextSpeed = `${kmh}:${state.car.boosting}`
       if (nextSpeed !== speedKey) {
         speedKey = nextSpeed
         speedText.text = String(kmh)
         const barW = speedW - pad * 2
         speedBar.clear()
-        speedBar.roundRect(0, 0, barW, 4, 2).fill({ color: palette.hudText, alpha: 0.14 })
+        speedBar.roundRect(0, 0, barW, 5, 2.5).fill({ color: palette.hudText, alpha: 0.16 })
         const filled = barW * Math.min(1, kmh / 130)
-        if (filled > 1) speedBar.roundRect(0, 0, filled, 4, 2).fill({ color: view.car.boosting ? palette.boost : palette.hudAccent })
+        if (filled > 1) speedBar.roundRect(0, 0, filled, 5, 2.5).fill({ color: state.car.boosting ? palette.boost : palette.hudAccent })
       }
+
+      // While the lap is shown again the timing panel is away, its plate with it.
+      tower.visible = !state.replay
+      plate.show(!state.replay)
+
+      // The replay's mark, its dot blinking like a recorder's.
+      replayTag.visible = state.replay
+      if (state.replay) replayDot.alpha = now % 1.2 < 0.75 ? 1 : 0.25
 
       // The result stays while the lap is finished, or a few seconds when the clock runs on.
       const showingResult = resultAttempt === lap.attempt && (lap.phase === "finished" || now < finishShownUntil)
       result.visible = showingResult
       if (showingResult) drawResultBoard(lap.attempt)
-      const onPad = state.pad === "gamepad"
       if (showingResult) setMessage("")
       else if (now < toastUntil) setMessage(toastText)
       else if (now < offRoadUntil) setMessage("off the road")
-      else if (lap.phase === "ready") setMessage(screen ? "point where to go to start" : onPad ? "pull RT to start" : "press ↑ to start")
       else setMessage("")
     }
   }

@@ -66,8 +66,12 @@ export const poseAt = (poses: ReadonlyArray<number>, timeMs: number): GhostPose 
 }
 
 export interface Ghost {
-  /** Where the ghost car is for this view, or null with no ghost. Also lets a waiting ghost in once no lap runs. */
-  pose(view: RaceView): GhostPose | null
+  /**
+   * Where the ghost car is for this view (the player's race, or the lap shown again), or null
+   * with no ghost. `racing` is whether a lap of the player's runs: a waiting ghost comes in
+   * once it does not.
+   */
+  pose(view: RaceView, racing: boolean): GhostPose | null
   /** The ghost being raced (or the one about to be, between laps). */
   current(): LapGhost | null
   /** Race against `ghost` from the next lap on (at once when no lap runs). */
@@ -79,8 +83,8 @@ export const createGhost = (): Ghost => {
   let waiting: { readonly ghost: LapGhost | null } | null = null
   let running = false
   return {
-    pose(view) {
-      running = view.lap.phase === "running"
+    pose(view, racing) {
+      running = racing
       if (waiting !== null && !running) {
         current = waiting.ghost
         waiting = null
