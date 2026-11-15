@@ -11,18 +11,21 @@
  *
  * Up is throttle, down and space brake (and reverse from a stop), left and right turn the
  * wheel; on a gamepad the right trigger, the left trigger and the stick. Throttle and brake
- * held together in a turn are the drift (the simulation's rule, not a key of its own). Nothing on screen
- * explains this beyond the start prompt: the arrows are the game.
+ * held together in a turn are the drift (the simulation's rule). On a keyboard both arrows at
+ * once are awkward, so Z holds both (and RB on a gamepad): hold it through a turn to drift. Nothing on screen
+ * explains this beyond the start prompt and the drift row of the speed panel.
  */
 import { Controls, Gamepad, Keyboard } from "@typeonce/ritmo-browser"
 import type { DriveInput } from "../sim/index.ts"
 
-const Actions = Controls.actions({ buttons: ["throttle", "brake", "stop", "restart", "mute"], vectors: ["move"] })
+const Actions = Controls.actions({ buttons: ["throttle", "brake", "drift", "stop", "restart", "mute"], vectors: ["move"] })
 
 const keyBindings = {
   move: Keyboard.vector({ up: ["ArrowUp", "w"], down: ["ArrowDown", "s"], left: ["ArrowLeft", "a"], right: ["ArrowRight", "d"] }),
   throttle: ["ArrowUp", "w"],
   brake: ["ArrowDown", "s"],
+  /** Throttle and brake at once: the drift, on one key. */
+  drift: ["z", "Z"],
   stop: [" "],
   restart: ["r"],
   mute: ["m"]
@@ -34,6 +37,7 @@ const padBindings = {
   // are the all-or-nothing buttons for pads without them.
   throttle: ["south"],
   brake: ["east"],
+  drift: ["rightBumper"],
   stop: ["west"],
   restart: ["north", "start"],
   mute: ["leftStick"]
@@ -104,8 +108,9 @@ export const createInput = (host: Window): Input => {
       const padState: PadState = !pad.connected ? { kind: "none" } : pad.standard ? { kind: "ready", active: padActive } : { kind: "buttons-only" }
       const page = { toggleMute: snapshot.actions.mute.pressed, pad: padState }
 
-      const throttle = Math.max(keyboard.actions.throttle.held ? 1 : 0, padThrottle)
-      const brake = Math.max(keyboard.actions.brake.held || space ? 1 : 0, padBrake)
+      const drift = keyboard.actions.drift.held || pad.actions.drift.held
+      const throttle = Math.max(keyboard.actions.throttle.held || drift ? 1 : 0, padThrottle)
+      const brake = Math.max(keyboard.actions.brake.held || space || drift ? 1 : 0, padBrake)
       // Screen x grows to the right; steer is positive to the left.
       // The keyboard is all or nothing; the stick goes through the curve.
       const keySteer = -keyboard.vectors.move.x

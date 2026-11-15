@@ -38,7 +38,10 @@ import { createAudio } from "./audio.ts"
 import { chooseBackend } from "./backend.ts"
 import { Bests, boardsLayer, Rivals } from "./boards.ts"
 import type { Stage } from "./contract.ts"
+import { createField, type Field } from "./field.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
+import { palette } from "./palette.ts"
+import { createPassTags } from "./tags.ts"
 import { createMadeWith } from "./brand/made-with.ts"
 import { createHud, hudFont, hudLabelFont, panelAlpha } from "./hud.ts"
 import { createInput } from "./input.ts"
@@ -65,6 +68,7 @@ declare global {
       readonly laps?: Laps
       readonly online?: Online
       readonly rerun?: Rerun
+      readonly field?: Field
       /** When set, drives the car instead of the keyboard and the gamepad (`scripts/drive.ts`). */
       drive?: (view: RaceView, track: TrackData) => DriveInput
     }
@@ -147,6 +151,12 @@ const steering = (): Steering => "car"
 
 const laps = createLaps(entry.id, loaded?.best ?? null, steering)
 const ghost = createGhost()
+// More ghosts beside the raced one: the board's runs just ahead, up to the player's pick (1, 5
+// or 10). Dev builds only: `?ghosts=100` races a crowd of bot laps instead, to see how many the
+// page can draw.
+const crowdCount = import.meta.env.DEV && params.has("ghosts") ? Math.max(0, Math.min(1000, Number(params.get("ghosts") || 100) || 0)) : 0
+const field = createField(stage.world, crowdCount > 0 ? { crowd: { track: entry.id, count: crowdCount } } : {})
+const passTags = createPassTags(stage, track)
 const online = createOnline({
   enabled: leaderboard !== null,
   run,
@@ -157,10 +167,14 @@ const online = createOnline({
   identity: loaded?.profile.identity ?? null,
   asked: loaded?.profile.asked ?? false,
   rival: loaded?.rival ?? { version: 1, choice: { kind: "next" }, run: null },
+  field: loaded?.settings.ghosts ?? 1,
+  raceField: (runs) => {
+    if (crowdCount === 0) field.set(runs)
+  },
   tracks: tracks.map((one) => one.id)
 })
 const rerun = createRerun(track)
-window.__race = { session, stage, ghost, laps, online, rerun }
+window.__race = { session, stage, ghost, laps, online, rerun, field }
 
 const panels = createPanels({
   online,
@@ -168,7 +182,8 @@ const panels = createPanels({
   track: entry.id,
   switchTrack,
   shown: loaded?.settings.board ?? true,
-  keep: (board) => void run(Settings.use((settings) => settings.change({ board })))
+  keep: (board) => void run(Settings.use((settings) => settings.change({ board }))),
+  keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 })))
 })
 /** The wipe covers the window: cut to the lap just driven, and open the board beside it. */
 const showLapAgain = (): void => {
@@ -324,7 +339,11 @@ const loop = FixedLoop.start({
       if (heardAgain(event)) audio.handle(event, shown, null)
     }
     scene.update(shown, seconds)
-    actors.update(shown, ghost.pose(shown, view.lap.phase === "running"), seconds)
+    const ghostPose = ghost.pose(shown, view.lap.phase === "running")
+    actors.update(shown, ghostPose, seconds)
+    field.update(shown, view.lap.phase === "running")
+    const raced = ghost.current()
+    passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: raced.name, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
     hud.update(view, { pad: padLabel, car: shown.car, replay: replaying }, seconds)
     panels.update(view.lap.phase === "running")
     replayLook.show(replaying)

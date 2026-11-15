@@ -120,10 +120,13 @@ export const carLook = (): CarLook => ({
 })
 
 /** The ghost: one see-through material for every part, no outline. */
-export const ghostLook = (): CarLook => {
-  const ghost = new Material3D({ baseColor: palette.ghost, roughness: 0.6, alphaMode: "blend", alpha: 0.38 })
+export const ghostLook = (color: number = palette.ghost, alpha: number = GHOST_ALPHA): CarLook => {
+  const ghost = new Material3D({ baseColor: color, roughness: 0.6, alphaMode: "blend", alpha })
   return { body: ghost, stripe: ghost, glass: ghost, tyre: ghost, hub: ghost, trim: ghost, brake: ghost, head: ghost }
 }
+
+/** How see-through the raced ghost is when nothing fades it. */
+export const GHOST_ALPHA = 0.38
 
 export interface CarModel {
   readonly root: Container3D
@@ -345,7 +348,8 @@ export const createCar = (parent: Container3D) => {
 
 /** The ghost: shown at its pose when there is one, wheels spinning with how far it moved. */
 export const createGhost = (parent: Container3D) => {
-  const model = buildCar(ghostLook(), true)
+  const look = ghostLook()
+  const model = buildCar(look, true)
   model.root.visible = false
   parent.addChild(model.root)
   let wheelAngle = 0
@@ -359,7 +363,9 @@ export const createGhost = (parent: Container3D) => {
         had = false
         return
       }
-      model.root.visible = true
+      const fade = ghost.fade ?? 1
+      model.root.visible = fade > 0.01
+      look.body.alpha = GHOST_ALPHA * fade
       pose(model, ghost.x, ghost.y, ghost.z, ghost.yaw, ghost.pitch, ghost.roll)
       if (had && seconds > 0) {
         const moved = (ghost.x - lastX) * Math.sin(ghost.yaw) + (ghost.z - lastZ) * Math.cos(ghost.yaw)

@@ -16,8 +16,10 @@
  * Two laps against the stand-in board (`?server=fake&fresh`):
  * - lap A, for the obstacles: the bot, steered into the crate wall and slow through the
  *   spiral so the lap lands low on the board;
- * - lap B, the bot's clean lap, against the ghost of the run just above lap A: it drifts
- *   the spiral, wins, and the player's row climbs the board.
+ * - lap B, the bot's clean lap, against the ghost of the run just above lap A: the opener
+ *   closes in on it racing alone, then its ghost pops in, then the crowd of 100 bot ghosts
+ *   (`?ghosts=100`, shown only there); it drifts the spiral, wins, and the player's row
+ *   climbs the board.
  * The camera follows the car up close for each shot (`Stage.focusOn`), always on the move
  * (a push in, a pull out, a slide), and kicks in on a hit; the big hits play in slow
  * motion. Between shots the page runs on unfilmed. The captions, the flash and the end card
@@ -50,7 +52,7 @@ page.on("console", (message) => {
 page.on("pageerror", (error) => errors.push(String(error)))
 
 await page.clock.install()
-await page.goto("http://localhost:5380/?server=fake&fresh", { waitUntil: "load" })
+await page.goto("http://localhost:5380/?server=fake&fresh&ghosts=100", { waitUntil: "load" })
 await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
 
 // Animation frames come only when a video frame is made. Their stamps move by exact
@@ -118,6 +120,13 @@ const advance = async (ms: number): Promise<void> => {
 // ── the page's state, the bot and the director ──────────────────────────
 
 for (let i = 0; i < 600 && !(await page.evaluate(() => (window as any).__race?.online !== undefined)); i++) await advance(FRAME_MS)
+// The crowd of 100 bot ghosts is driven in workers, on real time: wait for all of it, then
+// keep it hidden but for its shot.
+for (let waited = 0; (await page.evaluate(() => (window as any).__race.field.ready())) < 100; waited += 200) {
+  if (waited > 120_000) throw new Error("the crowd of ghosts never came")
+  await new Promise((done) => setTimeout(done, 200))
+}
+await page.evaluate(() => (window as any).__race.field.show(0))
 for (let i = 0; i < 90; i++) await advance(FRAME_MS)
 
 // The loop keeps the time left over below one tick. Left near a whole tick, the rounding in
@@ -165,6 +174,17 @@ await page.evaluate(async () => {
     kick: 0,
     flash: 0
   })
+  // The raced ghost, held back for the opener: hidden (-1), popping in from a time (ms), or as the page has it (null).
+  w.__ghostAt = null as number | null
+  const posed = race.ghost.pose.bind(race.ghost)
+  race.ghost.pose = (view: any, racing: boolean) => {
+    const pose = posed(view, racing)
+    const at = w.__ghostAt
+    if (pose === null || at === null) return pose
+    if (at < 0) return null
+    // Drawn whole even over the car (the game fades a ghost there): this is its entrance.
+    return { ...pose, fade: Math.min(1, (performance.now() - at) / 150) }
+  }
   const drain = race.session.drainEvents.bind(race.session)
   race.session.drainEvents = () => {
     const events = drain()
@@ -211,7 +231,8 @@ await page.evaluate(async () => {
       replaying,
       wipe: !(document.querySelector(".tgp-wipe")?.hasAttribute("hidden") ?? true),
       board: (document.querySelector(".tgp-rows")?.getBoundingClientRect().width ?? 0) > 0,
-      gained: document.querySelector(".tgp-gained")?.textContent ?? ""
+      gained: document.querySelector(".tgp-gained")?.textContent ?? "",
+      ghost: race.ghost.current()?.name ?? ""
     }
   }
 
@@ -347,7 +368,7 @@ await page.evaluate(async () => {
   }
 })
 
-type State = { phase: string; t: number; s: number; finishes: number; replaying: boolean; wipe: boolean; board: boolean; gained: string }
+type State = { phase: string; t: number; s: number; finishes: number; replaying: boolean; wipe: boolean; board: boolean; gained: string; ghost: string }
 const state = (): Promise<State> => page.evaluate(() => (window as any).__state())
 
 /** Runs the page on, unfilmed and three times as fast, until `done`. */
@@ -360,6 +381,7 @@ const skipUntil = async (done: (state: State) => boolean, limitSeconds: number =
 }
 
 type Pair = readonly [number, number]
+type Caption = { readonly text: string; readonly sub?: string; readonly from?: number; readonly to?: number; readonly left?: boolean }
 
 interface Shot {
   readonly seconds: number
@@ -375,7 +397,14 @@ interface Shot {
   readonly ease?: number
   /** Whether this frame plays at half speed. */
   readonly slow?: (state: State) => boolean
-  readonly caption?: { readonly text: string; readonly sub?: string; readonly from?: number; readonly to?: number; readonly left?: boolean }
+  readonly caption?: Caption
+  /** More than one caption, one after another. */
+  readonly captions?: ReadonlyArray<Caption>
+  /** For a shot that tells a story of its own: the zoom and the share of the whole table `u` seconds in. */
+  readonly zoomAt?: (u: number) => number
+  readonly fromTableAt?: (u: number) => number
+  /** Before each frame, `u` seconds in: changes to the page. */
+  readonly at?: (u: number) => Promise<void>
   readonly end?: boolean
   /** The page's zoom about the board over the shot, from the first to the second, steady (1: none). */
   readonly punch?: Pair
@@ -402,14 +431,16 @@ const film = async (name: string, shot: Shot): Promise<void> => {
     const u = i / FPS
     const along = smooth(i / Math.max(1, count - 1))
     await page.evaluate((hold) => void ((window as any).__holdRows = hold), shot.holdRowsUntil !== undefined && u < shot.holdRowsUntil)
+    await shot.at?.(u)
+    const table = shot.fromTableAt?.(u) ?? (shot.fromTable === true ? 1 - along : 0)
     const camera = {
-      zoom: lerp(shot.zoom, along),
+      zoom: shot.zoomAt?.(u) ?? lerp(shot.zoom, along),
       lead: shot.lead ?? 0.3,
       ghost: shot.ghost ?? false,
       offsetX: lerp(shot.slideX ?? [0, 0], along),
       offsetZ: lerp(shot.slideZ ?? [0, 0], along),
-      fromTable: shot.fromTable === true ? 1 - along : 0,
-      snap: i === 0 || shot.fromTable === true,
+      fromTable: table,
+      snap: i === 0 || table > 0,
       ease: shot.ease ?? 3
     }
     // The camera is placed before the frame is drawn, on where the car is going into it.
@@ -421,7 +452,7 @@ const film = async (name: string, shot: Shot): Promise<void> => {
     if (shot.punch !== undefined) {
       await page.evaluate((value) => (window as any).__punch(value), lerp(shot.punch, i / Math.max(1, count - 1)))
     }
-    const c = shot.caption
+    const c = shot.caption ?? shot.captions?.find((one) => u >= (one.from ?? 0) && u < (one.to ?? shot.seconds))
     const from = c?.from ?? 0
     const to = c?.to ?? shot.seconds
     const overlay = shot.end === true
@@ -461,17 +492,53 @@ await film("jump", { seconds: 1.8, zoom: [3.4, 2.3], slow: (now) => now.s >= 357
 
 // Lap A done: it goes on the board; start again once its replay is up.
 await skipUntil((now) => now.finishes >= 1 && now.replaying && now.board)
+// Lap B races the board's fastest run: close to the bot's clean lap, so the ghost stays
+// beside the car through the opener instead of dropping behind it.
+const leader: string = await page.evaluate(() => {
+  const top = (window as any).__race.online.state().board?.top[0]
+  ;(window as any).__race.online.choose({ kind: "run", runId: top.runId })
+  return top.name
+})
+await skipUntil((now) => now.ghost === leader)
 await page.evaluate(() => {
   const tr = (window as any).__tr
   tr.mode = "B"
   tr.restart = true
 })
 
-// Lap B: the opener (the whole table closing in on the car flat out beside its ghost), the
-// drift round the spiral, the finish, then straight to the board.
-await skipUntil((now) => now.phase === "running" && now.t >= 2100)
+// Lap B: the opener, one take of the same race: the whole table closing in on the car racing
+// alone, its ghost popping in beside it, then the whole pack of 100 around it. Then the drift
+// round the spiral, the finish, and straight to the board.
+await page.evaluate(() => void ((window as any).__ghostAt = -1))
+await skipUntil((now) => now.phase === "running" && now.t >= 2200)
 await log("open")
-await film("open", { seconds: 2.2, zoom: [1, 2.5], ghost: true, lead: 0, fromTable: true, caption: { text: "RACE YOUR GHOST", sub: "THE RUN JUST ABOVE YOURS", from: 0.7 } })
+const GHOST_IN = 3.4
+const PACK_IN = 6.4
+const span = (u: number, from: number, to: number): number => smooth(Math.max(0, Math.min(1, (u - from) / (to - from))))
+await film("open", {
+  seconds: 10.0,
+  zoom: [1, 1],
+  zoomAt: (u) => 1 + 1.3 * span(u, 0, GHOST_IN) - 0.55 * span(u, PACK_IN, PACK_IN + 1.2) - 0.2 * span(u, PACK_IN + 1.2, 10),
+  fromTableAt: (u) => 1 - span(u, 0, GHOST_IN),
+  at: async (u) => {
+    if (u >= GHOST_IN) {
+      await page.evaluate(() => {
+        const w = window as any
+        if (w.__ghostAt < 0) w.__ghostAt = performance.now()
+      })
+    }
+    await page.evaluate((amount) => (window as any).__race.field.show(amount), Math.max(0, Math.min(1, (u - PACK_IN) / 0.35)))
+  },
+  captions: [
+    { text: "TABLETOP TIME ATTACK", sub: "SET THE FASTEST LAP", from: 0.3, to: GHOST_IN - 0.3 },
+    { text: "RACE YOUR GHOST", sub: "CHASE THE RUN TO BEAT", from: GHOST_IN, to: PACK_IN },
+    { text: "RACE THE PACK", sub: "A WHOLE FIELD OF GHOSTS", from: PACK_IN + 0.05 }
+  ]
+})
+await page.evaluate(() => {
+  ;(window as any).__race.field.show(0)
+  ;(window as any).__ghostAt = null
+})
 await skipUntil((now) => now.phase === "running" && now.s >= 270 && now.s < 340)
 await log("drift")
 await film("drift", { seconds: 2.6, zoom: [2.4, 2.9], caption: { text: "DRIFT", sub: "HOLD GAS + BRAKE", from: 0.15 } })

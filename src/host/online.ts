@@ -22,6 +22,7 @@ import { type Board, type Entry, type Identity, Leaderboard, type LeaderboardSha
 import { tidyName } from "../api/names.ts"
 import { Bests, type GhostChoice, Outbox, Rivals, type SavedRival } from "./boards.ts"
 import { ghostFromReplay, type Ghost, type LapGhost } from "./ghost.ts"
+import type { FieldRun } from "./field.ts"
 import { makeHandle } from "./handles.ts"
 import type { FinishResult, Laps } from "./laps.ts"
 import { Profile } from "./profile.ts"
@@ -64,6 +65,10 @@ export interface OnlineState {
   /** The player's place on this board, from the last board or the last run sent. */
   readonly rank: { readonly rank: number; readonly total: number } | null
   readonly choice: GhostChoice
+  /** How many ghosts to race, the raced one included: 1, 5 or 10. */
+  readonly field: number
+  /** The runs of the board raced beside the ghost, in the order of their tints (`fieldTint`). */
+  readonly fieldRuns: ReadonlyArray<string>
   /** A ghost is being fetched or driven. */
   readonly ghostLoading: boolean
   /** Counts the times the page should offer the player a name (a name the server no longer knows). */
@@ -80,6 +85,8 @@ export interface Online {
   finished(result: FinishResult): void
   refreshBoard(): void
   choose(choice: GhostChoice): void
+  /** How many ghosts to race (`fieldSizes`). */
+  setField(count: number): void
   /** Whether a name could be taken now (it is not saved). */
   checkName(name: string): Promise<NameAnswer>
   /** Registers the name, or renames the player who has one. */
@@ -101,6 +108,10 @@ export interface OnlineOptions {
   /** Makes up a name for a new player. `makeHandle` unless a test wants to know it. */
   readonly handle?: () => string
   readonly rival: SavedRival
+  /** How many ghosts to race, the raced one included (`fieldSizes`). */
+  readonly field?: number
+  /** Gets the runs to race beside the ghost, whenever they change (`Field.set`). */
+  readonly raceField?: (runs: ReadonlyArray<FieldRun>) => void
   /** Every track id, to send what waits on each. */
   readonly tracks: ReadonlyArray<string>
   /** Defers work that would cost a frame (driving a replay again) out of the current tick. */
@@ -108,6 +119,9 @@ export interface OnlineOptions {
   /** How long a request may take before it counts as unavailable. */
   readonly timeoutMs?: number
 }
+
+/** The choices of how many ghosts to race. */
+export const fieldSizes = [1, 5, 10] as const
 
 const unavailable: Unavailable = { _tag: "Unavailable" }
 
@@ -148,6 +162,12 @@ export const createOnline = (options: OnlineOptions): Online => {
   /** The last rival's run, kept for offline. */
   let rivalRun: RunReplay | null = options.rival.run
   let ghostLoading = false
+  let field = fieldSizes.includes(options.field as 1) ? (options.field as number) : 1
+  let fieldRuns: ReadonlyArray<string> = []
+  /** The field last asked for (its run ids), so a change asks once. */
+  let fieldWanted = ""
+  /** Replays of the board's runs fetched for the field, by run id. */
+  const fetched = new Map<string, RunReplay>()
   let namePrompts = 0
   /** A made-up name is being registered: the lap waits for that, not for the player. */
   let naming = false
@@ -159,6 +179,7 @@ export const createOnline = (options: OnlineOptions): Online => {
   let snapshot: OnlineState | null = null
   const changed = (): void => {
     snapshot = null
+    pickField()
     for (const listener of listeners) {
       try {
         listener()
@@ -244,7 +265,10 @@ export const createOnline = (options: OnlineOptions): Online => {
   const resolveGhost = (): void => {
     const request = ++ghostRequest
     defer(() => {
-      if (request === ghostRequest) showLocal()
+      if (request !== ghostRequest) return
+      showLocal()
+      // The raced ghost may have changed: it leaves the field.
+      changed()
     })
     if (!enabled || choice.kind === "none" || choice.kind === "own") {
       ghostLoading = false
@@ -280,6 +304,45 @@ export const createOnline = (options: OnlineOptions): Online => {
         return
       }
       void fetchRun(request, entry.runId)
+    })
+  }
+
+  // ── the field ──────────────────────────────────────────────────────────
+
+  /**
+   * The runs to race beside the ghost: the board's runs just ahead of the player's best (all
+   * of them are, without one), nearest first, then the ones just behind; never the player's
+   * own nor the raced ghost's. Their replays are fetched, then handed on.
+   */
+  const pickField = (): void => {
+    const raced = ghost.current()?.runId ?? null
+    const best = laps.best()?.timeMs ?? Number.POSITIVE_INFINITY
+    const seen = new Set<string>()
+    const entries = board === null || !enabled || choice.kind === "none" ? [] : [...board.top, ...board.around].filter((entry) => {
+      if (entry.mine || entry.runId === raced || seen.has(entry.runId)) return false
+      seen.add(entry.runId)
+      return true
+    })
+    const ahead = entries.filter((entry) => entry.timeMs < best).sort((a, b) => b.timeMs - a.timeMs)
+    const behind = entries.filter((entry) => entry.timeMs >= best).sort((a, b) => a.timeMs - b.timeMs)
+    const picked = [...ahead, ...behind].slice(0, field - 1)
+    const wanted = picked.map((entry) => entry.runId).join(" ")
+    if (wanted === fieldWanted) return
+    fieldWanted = wanted
+    void Promise.all(
+      picked.map(async (entry) => {
+        if (!fetched.has(entry.runId)) {
+          const got = await run(ask(timeoutMs, (lb) => lb.replay(entry.runId)))
+          if (got !== undefined && Result.isSuccess(got)) fetched.set(entry.runId, got.success)
+        }
+        return fetched.get(entry.runId)
+      })
+    ).then((found) => {
+      if (wanted !== fieldWanted) return
+      const runs = found.filter((one): one is RunReplay => one !== undefined)
+      fieldRuns = runs.map((one) => one.runId)
+      options.raceField?.(runs.map((one) => ({ key: one.runId, name: one.name, replay: one.replay })))
+      changed()
     })
   }
 
@@ -413,7 +476,7 @@ export const createOnline = (options: OnlineOptions): Online => {
       if (snapshot !== null) return snapshot
       const me = board?.me ?? null
       const rank = submitted !== null ? { rank: submitted.rank, total: submitted.total } : me !== null && board !== null ? { rank: me.rank, total: board.total } : null
-      snapshot = { enabled, reachable, identity, board, boardLoading, post, rank, choice, ghostLoading, namePrompts }
+      snapshot = { enabled, reachable, identity, board, boardLoading, post, rank, choice, field, fieldRuns, ghostLoading, namePrompts }
       return snapshot
     },
     subscribe(listener) {
@@ -456,6 +519,10 @@ export const createOnline = (options: OnlineOptions): Online => {
         })
     },
     refreshBoard,
+    setField(count) {
+      field = fieldSizes.includes(count as 1) ? count : 1
+      changed()
+    },
     choose(next) {
       choice = next
       keepRival()

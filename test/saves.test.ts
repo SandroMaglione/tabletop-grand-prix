@@ -44,7 +44,7 @@ test("a first visit has the default settings, no name and nothing per board", as
       }
     })
   )
-  assert.deepEqual(seen.settings, { version: 3, muted: false, track: "", board: true })
+  assert.deepEqual(seen.settings, { version: 4, muted: false, track: "", board: true, ghosts: 1 })
   assert.equal(seen.fresh, true)
   assert.deepEqual(seen.profile, { version: 1, identity: null, asked: false })
   assert.equal(seen.best, null)
@@ -99,9 +99,24 @@ test("an unreadable save is kept aside and reads as nothing", async () => {
     })
   )
   assert.equal(seen.best, null)
-  assert.equal(seen.settings.version, 3)
+  assert.equal(seen.settings.version, 4)
   assert.equal(await Effect.runPromise(store.get(`${key}.unreadable`)), "{ not json")
   assert.equal(await Effect.runPromise(store.get(`${storagePrefix}settings.unreadable`)), JSON.stringify({ version: 9 }))
+})
+
+test("settings saved before the ghost count keep the board choice and race one ghost", async () => {
+  const store = await makeStore({ [`${storagePrefix}settings`]: JSON.stringify({ version: 3, muted: true, track: "elsewhere", board: false }) })
+  const seen = await visit(
+    store,
+    Effect.gen(function*() {
+      const settings = yield* Settings
+      const before = yield* settings.saved
+      const after = yield* settings.change({ ghosts: 10 })
+      return { before, after }
+    })
+  )
+  assert.deepEqual(seen.before, { version: 4, muted: true, track: "elsewhere", board: false, ghosts: 1 })
+  assert.equal(seen.after.ghosts, 10)
 })
 
 test("the outbox keeps only the fastest run waiting, and forgets it once sent", async () => {

@@ -42,6 +42,8 @@ export interface GhostPose {
   readonly yaw: number
   readonly pitch: number
   readonly roll: number
+  /** How solid to draw it, 0 to 1 (`ghostFade`): faded near the car and once its lap is over. 1 when left out. */
+  readonly fade?: number
 }
 
 /** Everything that moves: the car, the ghost, crates, boost pads, gates, particles, skid marks. */

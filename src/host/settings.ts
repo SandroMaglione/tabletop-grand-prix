@@ -1,5 +1,5 @@
 /**
- * The player's settings: whether the sound is on, the track they last drove, and whether they keep the leaderboard up. One value, kept for the whole device. Loading never fails: an unreadable value is
+ * The player's settings: whether the sound is on, the track they last drove, whether they keep the leaderboard up, and how many ghosts they race. One value, kept for the whole device. Loading never fails: an unreadable value is
  * kept aside and the defaults stand in.
  */
 import { Context, Effect, Layer, Ref, Schema } from "effect"
@@ -22,6 +22,7 @@ const SettingsV2 = Schema.Struct({
   muted: Schema.Boolean,
   track: Schema.String
 })
+/** Until the player could race more than one ghost. */
 export const SettingsV3 = Schema.Struct({
   version: Schema.Literal(3),
   muted: Schema.Boolean,
@@ -30,15 +31,25 @@ export const SettingsV3 = Schema.Struct({
   /** The leaderboard is up whenever no lap runs; false once the player has closed it. */
   board: Schema.Boolean
 })
-const SettingsJson = Schema.fromJsonString(Schema.Union([SettingsV1, SettingsV2, SettingsV3]))
-const LatestJson = Schema.fromJsonString(SettingsV3)
-export type SavedSettings = typeof SettingsV3.Type
+export const SettingsV4 = Schema.Struct({
+  version: Schema.Literal(4),
+  muted: Schema.Boolean,
+  /** The id of the track last driven, or "" for the first. */
+  track: Schema.String,
+  /** The leaderboard is up whenever no lap runs; false once the player has closed it. */
+  board: Schema.Boolean,
+  /** How many ghosts to race, the raced one included: 1, 5 or 10. */
+  ghosts: Schema.Union([Schema.Literal(1), Schema.Literal(5), Schema.Literal(10)])
+})
+const SettingsJson = Schema.fromJsonString(Schema.Union([SettingsV1, SettingsV2, SettingsV3, SettingsV4]))
+const LatestJson = Schema.fromJsonString(SettingsV4)
+export type SavedSettings = typeof SettingsV4.Type
 
-export const defaultSettings: SavedSettings = { version: 3, muted: false, track: "", board: true }
+export const defaultSettings: SavedSettings = { version: 4, muted: false, track: "", board: true, ghosts: 1 }
 
 /** A saved value of any version as the latest. */
-const latest = (saved: typeof SettingsV1.Type | typeof SettingsV2.Type | SavedSettings): SavedSettings =>
-  saved.version === 3 ? saved : { version: 3, muted: saved.muted, track: saved.track, board: true }
+const latest = (saved: typeof SettingsV1.Type | typeof SettingsV2.Type | typeof SettingsV3.Type | SavedSettings): SavedSettings =>
+  saved.version === 4 ? saved : { version: 4, muted: saved.muted, track: saved.track, board: saved.version === 3 ? saved.board : true, ghosts: 1 }
 
 export interface SettingsShape {
   readonly saved: Effect.Effect<SavedSettings>

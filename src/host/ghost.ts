@@ -44,7 +44,7 @@ const lerpAngle = (a: number, b: number, t: number): number => {
 }
 
 /** The pose at `timeMs`, interpolated between poses and held at both ends. */
-export const poseAt = (poses: ReadonlyArray<number>, timeMs: number): GhostPose | null => {
+export const poseAt = (poses: ArrayLike<number>, timeMs: number): GhostPose | null => {
   const count = poses.length / ghostStride
   if (count < 1) return null
   const at = (i: number, field: number): number => poses[i * ghostStride + field] ?? 0
@@ -63,6 +63,26 @@ export const poseAt = (poses: ReadonlyArray<number>, timeMs: number): GhostPose 
   const t = span > 0 ? (timeMs - at(low, 0)) / span : 0
   const mix = (field: number): number => at(low, field) + (at(high, field) - at(low, field)) * t
   return { x: mix(1), y: mix(2), z: mix(3), yaw: lerpAngle(at(low, 4), at(high, 4), t), pitch: mix(5), roll: mix(6) }
+}
+
+/** A ghost this close to the car (metres) is at its faintest, and from `NEAR_CLEAR` on fully drawn. */
+const NEAR = 1.2
+const NEAR_CLEAR = 2.8
+/** The faintest a ghost gets over the car, as a share of its usual look. */
+const NEAR_FLOOR = 0.2
+/** How long a ghost takes to fade away once its lap is over. */
+const GONE_MS = 600
+
+/**
+ * How solid to draw a ghost at `pose`, 0 to 1: fainter the closer it is to the car (so it never
+ * hides the road ahead of the player), and fading away once its lap of `endMs` is over (instead
+ * of parked on the line). `timeMs` is the race clock.
+ */
+export const ghostFade = (pose: { readonly x: number; readonly y: number; readonly z: number }, car: { readonly x: number; readonly y: number; readonly z: number }, timeMs: number, endMs: number): number => {
+  const gone = timeMs <= endMs ? 1 : Math.max(0, 1 - (timeMs - endMs) / GONE_MS)
+  const distance = Math.hypot(pose.x - car.x, pose.y - car.y, pose.z - car.z)
+  const near = NEAR_FLOOR + (1 - NEAR_FLOOR) * Math.min(1, Math.max(0, (distance - NEAR) / (NEAR_CLEAR - NEAR)))
+  return gone * near
 }
 
 export interface Ghost {
@@ -92,7 +112,9 @@ export const createGhost = (): Ghost => {
       if (current === null) return null
       // While ready the ghost waits on the start line; while running and finished it is
       // where its lap was at the same time on the clock.
-      return poseAt(current.poses, view.lap.phase === "ready" ? 0 : view.lap.timeMs)
+      const timeMs = view.lap.phase === "ready" ? 0 : view.lap.timeMs
+      const pose = poseAt(current.poses, timeMs)
+      return pose === null ? null : { ...pose, fade: ghostFade(pose, view.car, timeMs, current.timeMs) }
     },
     current: () => (waiting !== null && !running ? waiting.ghost : current),
     set(ghost) {

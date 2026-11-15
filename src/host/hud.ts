@@ -12,8 +12,8 @@
  *   board), the ghost being raced, the sectors as tabs (the one being driven is lit, a
  *   finished one is edged green or red), the gap to the ghost at the last line crossed, and
  *   the next medal's time.
- * - bottom right: the speed, with a bar, and under it the drift: its name, the two pedals
- *   that make it (in the keys of the device in use), and a bar that fills as a slide earns
+ * - bottom right: the speed, with a bar, and under it the drift: its name, the key that makes
+ *   it (Z, or the two triggers on a gamepad), and a bar that fills as a slide earns
  *   its push. It is always there, so the panel itself says the car can drift; nothing else
  *   on screen explains it.
  * - bottom centre: short messages ("off the road", a changed setting) and the result when a
@@ -697,7 +697,7 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
         driftKey = nextDrift
         const sliding = charge !== null
         driftName.style.fill = sliding || paid ? palette.hudText : palette.hudDim
-        driftKeys.text = onPad ? "RT+LT" : "↑+↓"
+        driftKeys.text = onPad ? "RT+LT" : "Z"
         driftKeys.style.fill = sliding ? palette.hudText : palette.hudDim
         const barW = speedW - pad * 2
         driftBar.clear()

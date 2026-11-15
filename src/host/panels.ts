@@ -33,8 +33,9 @@ import type { GhostChoice } from "./boards.ts"
 import { makeHandle } from "./handles.ts"
 import { formatTime, panelAlpha } from "./hud.ts"
 import { answerStatus, checking, type NameStatus, saving, shapeStatus } from "./name-messages.ts"
-import type { Online } from "./online.ts"
+import { fieldSizes, type Online } from "./online.ts"
 import { palette } from "./palette.ts"
+import { fieldTintCss } from "./tints.ts"
 import "./panels.css"
 
 export interface Panels {
@@ -62,6 +63,8 @@ export interface PanelsOptions {
   readonly shown: boolean
   /** The player closed the board, or opened it again: keep that for the next visit. */
   readonly keep: (shown: boolean) => void
+  /** The player picked how many ghosts to race: kept. */
+  readonly keepField: (count: number) => void
 }
 
 const hex = (colour: number): string => `#${colour.toString(16).padStart(6, "0")}`
@@ -155,6 +158,17 @@ export const createPanels = (options: PanelsOptions): Panels => {
     ghostLine.appendChild(chip)
     return { chip, choice: choice as GhostChoice }
   })
+  // How many ghosts: the raced one, and the board's runs just ahead beside it.
+  const fieldLine = el("div", "tgp-line")
+  fieldLine.appendChild(el("span", "tgp-label", "GHOSTS"))
+  const fieldChips = fieldSizes.map((count) => {
+    const chip = button("tgp-chip", String(count), () => {
+      online.setField(count)
+      options.keepField(count)
+    })
+    fieldLine.appendChild(chip)
+    return { chip, count }
+  })
   const meLine = el("div", "tgp-line")
   const meLabel = el("span", "tgp-label")
   const meName = el("span", "tgp-fill")
@@ -162,7 +176,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   meLine.append(meLabel, meName, meAction)
   const statusLine = el("div", "tgp-line tgp-bad")
   // The maker's plate first, as on the timing panel: it is the one on screen while a lap is shown again.
-  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, cols, rows, ghostLine, meLine, statusLine)
+  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, cols, rows, ghostLine, fieldLine, meLine, statusLine)
   root.appendChild(boardPanel)
 
   if (options.tracks.length > 1) {
@@ -179,11 +193,15 @@ export const createPanels = (options: PanelsOptions): Panels => {
   }
 
   /** One run as a bar: its place, its driver, its time, and how far it is behind the fastest (`leaderMs`). */
-  const drawRow = (entry: Entry, raced: string | null, ownRaced: boolean, leaderMs: number): HTMLElement => {
+  const drawRow = (entry: Entry, raced: string | null, ownRaced: boolean, leaderMs: number, fieldRuns: ReadonlyArray<string>): HTMLElement => {
     const row = el("div", "tgp-row")
+    const dot = el("span", "tgp-dot")
+    // A run raced beside the ghost wears its ghost's tint.
+    const inField = fieldRuns.indexOf(entry.runId)
+    if (inField >= 0) dot.style.background = fieldTintCss(inField)
     if (entry.mine) row.classList.add("tgp-mine")
     if (entry.runId === raced || (entry.mine && ownRaced)) row.classList.add("tgp-raced")
-    row.append(el("span", "tgp-rank tgp-mono", String(entry.rank)), el("span", "tgp-name", entry.name.toUpperCase()), el("span", "tgp-time tgp-mono", formatTime(entry.timeMs)), el("span", "tgp-behind tgp-mono", entry.timeMs > leaderMs ? `+${((entry.timeMs - leaderMs) / 1000).toFixed(3)}` : ""), el("span", "tgp-dot"))
+    row.append(el("span", "tgp-rank tgp-mono", String(entry.rank)), el("span", "tgp-name", entry.name.toUpperCase()), el("span", "tgp-time tgp-mono", formatTime(entry.timeMs)), el("span", "tgp-behind tgp-mono", entry.timeMs > leaderMs ? `+${((entry.timeMs - leaderMs) / 1000).toFixed(3)}` : ""), dot)
     row.dataset["key"] = entry.mine ? "me" : `player:${entry.name}`
     row.title = entry.mine ? "Race your best" : `Race ${entry.name}`
     row.addEventListener("click", () => online.choose(entry.mine ? { kind: "own" } : { kind: "run", runId: entry.runId }))
@@ -250,16 +268,20 @@ export const createPanels = (options: PanelsOptions): Panels => {
       rows.appendChild(el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST"))
     } else {
       const leaderMs = board.top[0]?.timeMs ?? 0
-      for (const entry of board.top) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs))
+      for (const entry of board.top) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs, state.fieldRuns))
       const around = board.around.filter((entry) => !board.top.some((top) => top.runId === entry.runId))
       if (around.length > 0) {
         const last = board.top[board.top.length - 1]
         const first = around[0]
         if (last !== undefined && first !== undefined && first.rank > last.rank + 1) rows.appendChild(el("div", "tgp-gap", "···"))
-        for (const entry of around) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs))
+        for (const entry of around) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs, state.fieldRuns))
       }
     }
     for (const { chip, choice } of ghostChips) chip.setAttribute("aria-pressed", String(sameChoice(choice, state.choice)))
+    for (const { chip, count } of fieldChips) {
+      chip.setAttribute("aria-pressed", String(count === state.field))
+      chip.disabled = state.choice.kind === "none"
+    }
     if (state.identity === null) {
       meLabel.textContent = "NOT ON THE BOARD"
       meName.textContent = ""
