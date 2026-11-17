@@ -12,6 +12,7 @@ export const layerDown: Layer.Layer<Leaderboard> = Layer.succeed(
     rename: () => unavailable,
     submit: () => unavailable,
     board: () => unavailable,
+    page: () => unavailable,
     rival: () => unavailable,
     replay: () => unavailable
   })

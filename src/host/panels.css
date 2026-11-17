@@ -240,3 +240,64 @@
 .tgp-actions .tgp-button { height: 27px; padding: 0 12px; }
 /* A made-up name sits apart from the answer to the one typed. */
 .tgp-actions .tgp-random { margin-right: auto; }
+
+/* SHOW ALL, under the corner board's rows. */
+.tgp-all-open {
+  display: block;
+  width: calc(100% - 12px);
+  margin: 0 6px 6px;
+  height: 26px;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--hud-accent);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+}
+.tgp-all-open:hover { background: rgba(255, 255, 255, 0.08); border-style: solid; }
+
+/* The whole board, in the middle of the window over a dimmed race. */
+.tgp-all {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.5);
+  color: var(--hud-text);
+  font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.tgp-all[hidden] { display: none !important; }
+.tgp-all [hidden] { display: none !important; }
+.tgp-all-panel {
+  width: min(460px, 100%);
+  height: min(780px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--hud-back);
+}
+.tgp-all-rows {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Rows read in above are kept in place by `board-all.ts` itself (Safari has no anchoring); the browser's own would move them twice. */
+  overflow-anchor: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  padding-top: 2px;
+}
+.tgp-all-list { display: flex; flex-direction: column; gap: 2px; }
+.tgp-all-more { padding: 8px 0; text-align: center; font-size: 10px; color: var(--hud-dim); letter-spacing: 1px; }
+.tgp-all-keys { text-align: right; font-size: 10px; }
+.tgp-all .tgp-chip:disabled { opacity: 0.4; cursor: default; background: rgba(255, 255, 255, 0.1); }

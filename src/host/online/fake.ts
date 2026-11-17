@@ -6,14 +6,16 @@
  *
  * It starts with the made-up players of `fake-runs.json` (real replays). What the player
  * adds (their name, their runs) is kept in localStorage, so a reload finds the same board;
- * `?server=fake&fresh=1` starts it over. (`?server=down` is a server that never answers:
- * `down.ts`.)
+ * `?server=fake&fresh=1` starts it over, and `?server=fake&drivers=2000` pads the board with
+ * more made-up drivers, up to that many, to see a long one (their laps borrow the fixture's
+ * replays). (`?server=down` is a server that never answers: `down.ts`.)
  * Every answer comes after a short wait, like a network.
  */
 import { Effect, Layer } from "effect"
-import { type Board, type Entry, type Identity, Leaderboard, type NameRefused, type NameTaken, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../../api/contract.ts"
+import { type Board, type BoardPage, type Entry, type Identity, Leaderboard, pageMax, type NameRefused, type NameTaken, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../../api/contract.ts"
 import { nameShape, tidyName } from "../../api/names.ts"
 import { replayFromText, rulesVersion, runReplay, type Steering } from "../../sim/index.ts"
+import { makeHandle } from "../handles.ts"
 import fixture from "./fake-runs.json" with { type: "json" }
 
 interface Run {
@@ -55,6 +57,20 @@ export interface FakeOptions {
   readonly storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null
   /** Milliseconds each answer waits. */
   readonly latencyMs?: number
+  /** Pads each board with made-up drivers up to this many. */
+  readonly drivers?: number
+}
+
+/** Numbers from `seed`, the same each visit (mulberry32). */
+const seeded = (seed: number): (() => number) => {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 /** The stand-in as a `Leaderboard` layer. */
@@ -79,6 +95,20 @@ export const layerFake = (options: FakeOptions = {}): Layer.Layer<Leaderboard> =
         const id = `fake-${i}`
         players.set(id, { id, name: run.name, secret: `fake-secret-${i}` })
         board(track, rulesVersion).set(id, { runId: `${track}-fake-${i}`, playerId: id, timeMs: Math.floor(run.timeMs), steering: run.steering === "screen" ? "screen" : "car", replay: run.replay })
+      }
+    }
+    // The padding: times from just behind the leader to twice as slow, most of them in between.
+    const wanted = Math.min(10_000, Math.max(0, Math.floor(options.drivers ?? 0)))
+    for (const [track, runs] of Object.entries(fixture.runs)) {
+      const fastest = Math.min(...runs.map((run) => run.timeMs))
+      const random = seeded(wanted)
+      for (let i = runs.length; i < wanted; i++) {
+        const id = `fake-pad-${i}`
+        const lent = runs[i % runs.length]
+        if (lent === undefined) break
+        players.set(id, { id, name: makeHandle(random), secret: `fake-secret-pad-${i}` })
+        const timeMs = Math.floor(fastest * (1.02 + (random() + random() + random()) / 3))
+        board(track, rulesVersion).set(id, { runId: `${track}-fake-pad-${i}`, playerId: id, timeMs, steering: "car", replay: lent.replay })
       }
     }
   } else {
@@ -208,6 +238,17 @@ export const layerFake = (options: FakeOptions = {}): Layer.Layer<Leaderboard> =
             const top = entries.slice(0, topCount)
             const around = mine === null || mine.rank <= topCount ? [] : entries.slice(Math.max(0, mine.rank - 1 - aroundCount), mine.rank + aroundCount)
             return Effect.succeed({ track, rules: rulesVersion, total: order.length, top, around, me: mine } satisfies Board)
+          })
+        ),
+      page: (track, from, count, identity) =>
+        answer(
+          Effect.suspend(() => {
+            const me = identity === null ? null : known(identity)?.id ?? null
+            const order = ranked(track)
+            const first = Math.max(1, Math.floor(from))
+            const size = Math.max(1, Math.min(pageMax, Math.floor(count)))
+            const entries = order.slice(first - 1, first - 1 + size).map((run, i) => entry(run, first + i, me))
+            return Effect.succeed({ track, rules: rulesVersion, total: order.length, from: first, entries } satisfies BoardPage)
           })
         ),
       rival: (track, fasterThanMs, identity) =>

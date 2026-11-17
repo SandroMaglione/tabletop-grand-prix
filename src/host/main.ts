@@ -96,7 +96,7 @@ const apiUrl: unknown = import.meta.env.VITE_API_URL
 const server = params.get("server")
 const leaderboard: Layer.Layer<Leaderboard> | null =
   server === "fake"
-    ? (await import("./online/fake.ts")).layerFake({ fresh: params.has("fresh") })
+    ? (await import("./online/fake.ts")).layerFake({ fresh: params.has("fresh"), drivers: Number(params.get("drivers") ?? 0) || 0 })
     : server === "down"
       ? layerDown
       : typeof apiUrl === "string" && apiUrl !== ""
@@ -271,7 +271,8 @@ const step = (): void => {
   }
   const wanted = window.__race?.drive?.(session.view(), track) ?? read.drive
   // While the lap is shown again the player's car is out of sight: only starting again reaches it.
-  const asked = rerun.active() ? { ...idleInput, restart: wanted.restart } : wanted
+  // While the whole board is open over the race the car is left alone.
+  const asked = panels.modal() ? idleInput : rerun.active() ? { ...idleInput, restart: wanted.restart } : wanted
   // The simulation is given what a replay can hold, so the replay drives the same lap.
   const drive = quantise(asked)
   session.tick(drive)

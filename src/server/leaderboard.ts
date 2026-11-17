@@ -6,7 +6,7 @@
  * and files `Math.floor` of the time that gives.
  */
 import { Effect } from "effect"
-import type { Board, Entry, Identity, NameRefused, NameTaken, NotFound, RunRefused, RunReplay, Submitted, Unauthorised } from "../api/contract.ts"
+import { pageMax, type Board, type BoardPage, type Entry, type Identity, type NameRefused, type NameTaken, type NotFound, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../api/contract.ts"
 import { replayFromText, replayToText, rulesVersion, runReplay, trackById } from "../sim/index.ts"
 import { tidyName } from "../api/names.ts"
 import { foldName, judgeName } from "./names.ts"
@@ -254,6 +254,27 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
       return { ...base, around: (rows as ReadonlyArray<RunRow>).map((row, at) => entry(row, from + at + 1, viewerId)), me }
     })
 
+  /**
+   * Up to `count` runs of a board from rank `from` on, seen by whoever `authorization` proves.
+   * `from` and `count` come from the request: `from` is at least 1 and `count` 1 to `pageMax`.
+   */
+  const page = (track: string, from: number, count: number, authorization: string | undefined): Effect.Effect<BoardPage, NotFound, R> =>
+    Effect.gen(function* () {
+      if (trackById(track) === undefined) return yield* Effect.fail(notFound)
+      const rules = rulesVersion
+      const first = Number.isFinite(from) ? Math.max(1, Math.floor(from)) : 1
+      const size = Number.isFinite(count) ? Math.max(1, Math.min(pageMax, Math.floor(count))) : pageMax
+      const claimed = readAuthorization(authorization)
+      const [total, rows, playerRows] = yield* batch([
+        totalStatement(track, rules),
+        pageStatement(track, rules, first - 1, size),
+        ...(claimed === null ? [] : [playerStatement(claimed.id)])
+      ])
+      const viewerId = claimed !== null && (yield* proves(playerRows?.[0], claimed.secret)) ? claimed.id : null
+      const entries = ((rows ?? []) as ReadonlyArray<RunRow>).map((row, at) => entry(row, first + at, viewerId))
+      return { track, rules, total: totalOf(total), from: first, entries }
+    })
+
   const rivalStatement = (track: string, rules: number, fasterThanMs: number | null, except: string): Statement => ({
     query: `SELECT ${runColumns}, ${rankColumn} ${fromBoard} AND r.player_id != ? ${fasterThanMs === null ? "" : "AND r.time_ms < ?"}
       ORDER BY r.time_ms DESC, r.posted_at DESC, r.id DESC LIMIT 1`,
@@ -327,6 +348,7 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
     rename,
     submit,
     board,
+    page,
     rival,
     replay,
     adminPlayers,

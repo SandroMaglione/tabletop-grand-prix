@@ -52,6 +52,21 @@ export const Board = Schema.Struct({
 })
 export type Board = typeof Board.Type
 
+/** The most runs one page of a board holds. */
+export const pageMax = 200
+
+/** A stretch of a board, for reading all of it: the runs from rank `from` on, fastest first. */
+export const BoardPage = Schema.Struct({
+  track: Schema.String,
+  rules: count,
+  total: count,
+  /** The rank of the first run in `entries`. */
+  from: count,
+  /** At most `pageMax`; fewer at the end of the board, none past it. */
+  entries: Schema.Array(Entry)
+})
+export type BoardPage = typeof BoardPage.Type
+
 /** What the server made of a run that was sent. */
 export const Submitted = Schema.Struct({
   runId: Schema.String,
@@ -113,6 +128,8 @@ export interface LeaderboardShape {
   readonly submit: (identity: Identity, replay: string) => Effect.Effect<Submitted, RunRefused | Unauthorised | RateLimited | Unavailable>
   /** The board of a track under the server's rules, seen by `identity` (or by nobody). */
   readonly board: (track: string, identity: Identity | null) => Effect.Effect<Board, NotFound | Unavailable>
+  /** Up to `count` runs of a board (capped at `pageMax`) from rank `from` on (1 is the fastest), seen by `identity` (or by nobody). */
+  readonly page: (track: string, from: number, count: number, identity: Identity | null) => Effect.Effect<BoardPage, NotFound | Unavailable>
   /**
    * The run to chase: the slowest one that is still faster than `fasterThanMs`, never the
    * asking player's own. With `fasterThanMs` null (no lap yet), the slowest run on the
