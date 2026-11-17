@@ -1,8 +1,9 @@
 # Tabletop Grand Prix
 
-**A time-attack racer on a toy track.** One track on a table, one car, and
-a clock. Set the fastest lap, race the ghosts of the drivers just ahead of
-you, and climb the leaderboard.
+**A time-attack racer on a toy track, against the whole world.** Every lap
+you drive goes on one global leaderboard, and every lap on it can be raced:
+pick any driver on the board and their ghost lines up beside you. Chase the
+run just above yours, a rival, the world's fastest, or a field of ten at once.
 
 <p align="center"><a href="https://tabletop-grand-prix.typeonce.games"><b>▶ Play Tabletop Grand Prix in your browser</b></a> · free, nothing to install</p>
 
@@ -13,7 +14,40 @@ you, and climb the leaderboard.
   </picture>
 </a>
 
-<p align="center"><sub>One lap, alone, then with a ghost, then with a whole field of them. <a href="docs/media/trailer.mp4">Watch the 25-second trailer</a>.</sub></p>
+<p align="center"><sub>One lap, alone, then against a ghost from the board, then against a whole field of them. <a href="docs/media/trailer.mp4">Watch the 25-second trailer</a>.</sub></p>
+
+## Race the world
+
+There is one leaderboard, and everyone who plays is on it. Click any row and
+that lap becomes your ghost: the driver one place above you, a rival, or
+the world record. Each ghost is that driver's real lap, played back beside
+you, so you can see exactly where they brake, where they drift, and where
+you lose the time.
+
+![The game as you see it: the global leaderboard top right with every driver's best lap, the timing panel top left, and the start prompt over the track](docs/screenshots/board.webp)
+
+Finish a lap and it plays again as a replay, with the board open beside it
+and your row sliding up if you gained places. You get a name the first time
+you post a lap (three words, like *Shy Otter Skids*), and you can change it
+whenever you like. Every time on the board is real: the server drives each
+submitted lap again from its inputs before it counts.
+
+## Race the pack
+
+By default you race the run just above yours, so there is always someone to
+catch. Want more company? Race a field of five or ten ghosts from the board
+at once, each in its own colour, and see each name flash as you pass it.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/ghost.webp" alt="The red car off a boost pad, its blue see-through ghost a car length behind"></td>
+    <td><img src="docs/screenshots/pack.webp" alt="The red car leading a long rainbow trail of see-through ghost cars round a bend"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>one ghost: the run just above yours, right behind you</sub></td>
+    <td align="center"><sub>a whole field of ghosts (a hundred, for the trailer)</sub></td>
+  </tr>
+</table>
 
 ## Set the fastest lap
 
@@ -24,24 +58,6 @@ minute: beat 0:30 for bronze, 0:26 for silver, and 0:23 for gold. `R` starts
 again at once.
 
 ![The whole table: a winding track with a pond, a meadow, a crate wall, a bridge, and a spiral, seen from above](docs/screenshots/table.webp)
-
-## Race your ghost
-
-Every lap races a ghost: by default the run just above yours on the board,
-so there is always someone to catch. Want more company? Race a field of
-five or ten ghosts at once, each in its own colour, and see each name flash
-as you pass it.
-
-<table>
-  <tr>
-    <td><img src="docs/screenshots/ghost.webp" alt="The red car off a boost pad, its blue see-through ghost a car length behind"></td>
-    <td><img src="docs/screenshots/pack.webp" alt="The red car leading a long rainbow trail of see-through ghost cars round a bend"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>the run just above yours, right behind you</sub></td>
-    <td align="center"><sub>a whole field of ghosts (a hundred, for the trailer)</sub></td>
-  </tr>
-</table>
 
 ## Everything moves
 
@@ -68,16 +84,6 @@ a tight arc, leaving its marks on the road. Let go at the right time and
 the drift pays you back with a push. On a keyboard it is one key, `Z`.
 
 ![The red car drifting round the spiral, smoke and tyre marks behind it](docs/screenshots/drift.webp)
-
-## Climb the board
-
-Finish a lap and it plays again as a replay, with the leaderboard open
-beside it and your row sliding up if you gained places. You get a name
-the first time you post a lap (three words, like *Shy Otter Skids*), and
-you can change it whenever you like. Every time on the board is real:
-the server drives each submitted lap again from its inputs.
-
-![The game as you see it: the timing panel top left, the leaderboard top right, and the start prompt over the track](docs/screenshots/board.webp)
 
 ## Play
 
