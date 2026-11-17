@@ -343,7 +343,10 @@ const loop = FixedLoop.start({
     actors.update(shown, ghostPose, seconds)
     field.update(shown, view.lap.phase === "running")
     const raced = ghost.current()
-    passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: raced.name, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
+    // Passing your own best gets no tag: it would only say your name, right over your car (the
+    // ghost drives your line), and the delta already tells you are ahead.
+    const racedTag = raced === null || raced.kind === "own" ? "" : raced.name
+    passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: racedTag, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
     hud.update(view, { pad: padLabel, car: shown.car, replay: replaying }, seconds)
     panels.update(view.lap.phase === "running")
     replayLook.show(replaying)
