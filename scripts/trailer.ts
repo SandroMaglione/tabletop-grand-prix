@@ -2,7 +2,11 @@
  * Film the trailer: the real game, driven by the bot, filmed frame by frame and cut to
  * a short video.
  *
- *   node scripts/trailer.ts [out-dir] [--size 1920x1080] [--keep-frames]
+ *   node scripts/trailer.ts [out-dir] [--size 1920x1080] [--keep-frames] [--stills]
+ *
+ * `--stills` films the same race for pictures instead (the store page, the social cards):
+ * no captions, no HUD, no panels, a PNG every few frames in `<out-dir>/stills`, and it stops
+ * after the finish.
  *
  * Needs the page served (`pnpm dev`, http://localhost:5380) and ffmpeg. Writes
  * `<out-dir>/trailer.mp4` (default `output/trailer`).
@@ -34,6 +38,13 @@ const out = args.find((arg) => !arg.startsWith("--") && !/^\d+x\d+$/.test(arg)) 
 const sizeAt = args.indexOf("--size")
 const [width = 1920, height = 1080] = (sizeAt >= 0 ? (args[sizeAt + 1] ?? "") : "1920x1080").split("x").map(Number)
 const keepFrames = args.includes("--keep-frames")
+const stills = args.includes("--stills")
+/** In `--stills`, one picture every this many frames. */
+const STILL_EVERY = 4
+if (stills) {
+  rmSync(`${out}/stills`, { recursive: true, force: true })
+  mkdirSync(`${out}/stills`, { recursive: true })
+}
 const frames = `${out}/frames`
 rmSync(frames, { recursive: true, force: true })
 mkdirSync(frames, { recursive: true })
@@ -368,6 +379,17 @@ await page.evaluate(async () => {
   }
 })
 
+if (stills) {
+  // Only the table: the 3D view and the passing tags stay; the HUD and the page's panels go.
+  await page.evaluate(() => {
+    const stage = (window as any).__race.stage
+    for (const child of stage.app.stage.children) if (child !== stage.view && child.label !== "pass-tags") child.renderable = false
+    const style = document.createElement("style")
+    style.textContent = "body > :not(canvas) { visibility: hidden !important; }"
+    document.head.appendChild(style)
+  })
+}
+
 type State = { phase: string; t: number; s: number; finishes: number; replaying: boolean; wipe: boolean; board: boolean; gained: string; ghost: string }
 const state = (): Promise<State> => page.evaluate(() => (window as any).__state())
 
@@ -460,9 +482,16 @@ const film = async (name: string, shot: Shot): Promise<void> => {
       : c !== undefined && u >= from && u < to
         ? { kind: "caption", text: c.text, sub: c.sub ?? "", left: c.left ?? false, u: u - from, duration: to - from }
         : null
-    await page.evaluate((value) => (window as any).__overlay(value), overlay)
-    const { data } = await cdp.send("Page.captureScreenshot", { format: "jpeg", quality: 94 })
-    writeFileSync(`${frames}/${name}/${String(taken).padStart(5, "0")}.jpg`, Buffer.from(data, "base64"))
+    if (stills) {
+      if (i % STILL_EVERY === 0) {
+        const { data } = await cdp.send("Page.captureScreenshot", { format: "png" })
+        writeFileSync(`${out}/stills/${name}-${String(i).padStart(4, "0")}.png`, Buffer.from(data, "base64"))
+      }
+    } else {
+      await page.evaluate((value) => (window as any).__overlay(value), overlay)
+      const { data } = await cdp.send("Page.captureScreenshot", { format: "jpeg", quality: 94 })
+      writeFileSync(`${frames}/${name}/${String(taken).padStart(5, "0")}.jpg`, Buffer.from(data, "base64"))
+    }
     taken++
     filmed++
   }
@@ -545,6 +574,13 @@ await film("drift", { seconds: 2.6, zoom: [2.4, 2.9], caption: { text: "DRIFT", 
 await skipUntil((now) => now.phase === "running" && now.s >= 453)
 await log("finish")
 await film("finish", { seconds: 1.4, zoom: [3.0, 2.5], slow: (now) => now.phase === "finished" || now.s > 463 || now.s < 2 })
+if (stills) {
+  await browser.close()
+  rmSync(frames, { recursive: true, force: true })
+  console.log(`${out}/stills: ${filmed} frames filmed, one in ${STILL_EVERY} kept`)
+  for (const error of errors) console.error(`console error: ${error}`)
+  process.exit(0)
+}
 // The wipe plays unfilmed; the board's rows wait for the zoom.
 await page.evaluate(() => void ((window as any).__holdRows = true))
 await skipUntil((now) => now.wipe)
