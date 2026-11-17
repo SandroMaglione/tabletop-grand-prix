@@ -18,3 +18,7 @@ The design is in [docs/design.md](docs/design.md); the leaderboard's server (Clo
 - `node scripts/online-real.ts <site url>` plays a first visit on a deployed site (drive a lap, pick a name, post it, read the board); use it on staging.
 - `node scripts/lap-end.ts` drives a lap on the dev server and checks what follows the finish (the wipe, the replay, the board, `R`), with pictures in `output/`.
 - `pnpm verify:engines` checks that a replay gives the same lap in Chromium, Firefox, WebKit and Node.
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE). Any copy or derivative work must keep the [NOTICE](NOTICE), which credits Sandro Maglione at [typeonce.games](https://typeonce.games). The Typeonce name and logo and the PixiJS logo are not covered by the license.
