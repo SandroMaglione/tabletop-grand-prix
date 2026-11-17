@@ -89,6 +89,19 @@ test("the stand-in board's laps are from these rules and drive to the times it f
   }
 })
 
+test("the stand-in pads its board to the drivers asked for, and reads it a page at a time", async () => {
+  const board = await Effect.runPromise(Effect.gen(function*() {
+    return yield* Leaderboard
+  }).pipe(Effect.provide(layerFake({ storage: null, latencyMs: 0, drivers: 2000 }))))
+  const end = await Effect.runPromise(board.page(entry.id, 1990, 50, null))
+  assert.deepEqual([end.total, end.from, end.entries.length], [2000, 1990, 11])
+  const all = await Effect.runPromise(board.page(entry.id, 1, 10_000, null))
+  assert.equal(all.entries.length, 200)
+  assert.ok(all.entries.every((one, i) => one.rank === i + 1 && (i === 0 || (all.entries[i - 1]?.timeMs ?? 0) <= one.timeMs)), "fastest first, ranked in order")
+  const top = await Effect.runPromise(board.board(entry.id, null))
+  assert.deepEqual(top.top.map((one) => one.runId), all.entries.slice(0, 10).map((one) => one.runId))
+})
+
 test("the stand-in answers names like the server: shape, kept back, refused, taken", async () => {
   const board = await Effect.runPromise(Effect.gen(function*() {
     return yield* Leaderboard

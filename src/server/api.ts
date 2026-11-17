@@ -132,6 +132,7 @@ export const serverLayer = <R>(options: ServeOptions<R>) => {
       )
       .handle("replay", ({ params }) => leaderboard.replay(params.runId))
       .handle("board", ({ params, headers }) => leaderboard.board(params.track, headers.authorization))
+      .handle("page", ({ params, query, headers }) => leaderboard.page(params.track, query.from, query.count, headers.authorization))
       .handle("rival", ({ params, query, headers }) => leaderboard.rival(params.track, query.fasterThanMs ?? null, headers.authorization))
   )
 

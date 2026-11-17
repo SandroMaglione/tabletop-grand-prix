@@ -7,6 +7,7 @@
  *   runs, the player's own with its neighbours, the total, which ghost to race (next closest,
  *   their best, none, or any row clicked), the player's name with "change", and the tracks
  *   when there is more than one.
+ *   Under the rows, SHOW ALL opens the whole board in the middle of the window (`board-all.ts`).
  * - closed: one small panel, `L BOARD #12/340`, that fades while a lap runs.
  * - the name: a field with an answer as the player types, `RANDOM` for a made-up one
  *   (`handles.ts`), save, and cancel. Nobody has to open it: a new player is given a made-up
@@ -25,22 +26,22 @@
  * `L` and `Esc` do nothing while a text field has focus, and ritmo's keyboard already
  * ignores keys typed into one, so typing a name never drives the car.
  */
-import type { Entry } from "../api/contract.ts"
 import type { Board } from "../api/contract.ts"
 import { nameMaxLength } from "../api/names.ts"
+import { createAllBoard } from "./board-all.ts"
 import { createPlateLink, wipeLeavesMs } from "./brand/plate.ts"
 import type { GhostChoice } from "./boards.ts"
 import { makeHandle } from "./handles.ts"
-import { formatTime, panelAlpha } from "./hud.ts"
 import { answerStatus, checking, type NameStatus, saving, shapeStatus } from "./name-messages.ts"
 import { fieldSizes, type Online } from "./online.ts"
-import { palette } from "./palette.ts"
-import { fieldTintCss } from "./tints.ts"
+import { button, drawRow, el, raceMarks, setHudColours } from "./panels-dom.ts"
 import "./panels.css"
 
 export interface Panels {
   /** A text field of the panels has focus. */
   typing(): boolean
+  /** The whole board is open over the race: the car is left alone. */
+  modal(): boolean
   /** Once per drawn frame: whether a lap runs (the closed board fades). */
   update(running: boolean): void
   /** A lap started: the panels get out of the way. */
@@ -67,44 +68,14 @@ export interface PanelsOptions {
   readonly keepField: (count: number) => void
 }
 
-const hex = (colour: number): string => `#${colour.toString(16).padStart(6, "0")}`
-const rgba = (colour: number, alpha: number): string => `rgba(${(colour >> 16) & 255}, ${(colour >> 8) & 255}, ${colour & 255}, ${alpha})`
-
-const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
-  const node = document.createElement(tag)
-  if (className !== "") node.className = className
-  if (text !== "") node.textContent = text
-  return node
-}
-
-/** A button that does not take the keyboard's focus, so space and the arrows stay with the car. */
-const button = (className: string, text: string, onClick: () => void): HTMLButtonElement => {
-  const node = el("button", className, text)
-  node.type = "button"
-  node.tabIndex = -1
-  node.addEventListener("pointerdown", (event) => event.preventDefault())
-  node.addEventListener("click", (event) => {
-    event.stopPropagation()
-    onClick()
-  })
-  return node
-}
-
 const sameChoice = (a: GhostChoice, b: GhostChoice): boolean => a.kind === b.kind && (a.kind !== "run" || (b.kind === "run" && a.runId === b.runId))
 
 export const createPanels = (options: PanelsOptions): Panels => {
   const { online } = options
   const root = el("div", "tgp-panels")
-  root.style.setProperty("--hud-back", hex(palette.hudBack))
-  root.style.setProperty("--hud-back-a", rgba(palette.hudBack, panelAlpha))
-  root.style.setProperty("--hud-head-a", rgba(palette.hudHead, 0.55))
-  root.style.setProperty("--hud-text", hex(palette.hudText))
-  root.style.setProperty("--hud-dim", hex(palette.hudDim))
-  root.style.setProperty("--hud-accent", hex(palette.hudAccent))
-  root.style.setProperty("--hud-good", hex(palette.hudGood))
-  root.style.setProperty("--hud-bad", hex(palette.hudBad))
-  root.style.setProperty("--ghost", hex(palette.ghost))
+  setHudColours(root)
   document.body.appendChild(root)
+  const all = createAllBoard(online)
 
   /** The player keeps the board up. */
   let wanted = options.shown
@@ -147,6 +118,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   const cols = el("div", "tgp-cols")
   cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"))
   const rows = el("div", "tgp-rows")
+  const showAll = button("tgp-all-open", "SHOW ALL", () => all.show())
   const ghostLine = el("div", "tgp-line")
   ghostLine.appendChild(el("span", "tgp-label", "GHOST"))
   const ghostChips = ([
@@ -176,7 +148,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   meLine.append(meLabel, meName, meAction)
   const statusLine = el("div", "tgp-line tgp-bad")
   // The maker's plate first, as on the timing panel: it is the one on screen while a lap is shown again.
-  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, cols, rows, ghostLine, fieldLine, meLine, statusLine)
+  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, cols, rows, showAll, ghostLine, fieldLine, meLine, statusLine)
   root.appendChild(boardPanel)
 
   if (options.tracks.length > 1) {
@@ -192,21 +164,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
     trackLine.hidden = true
   }
 
-  /** One run as a bar: its place, its driver, its time, and how far it is behind the fastest (`leaderMs`). */
-  const drawRow = (entry: Entry, raced: string | null, ownRaced: boolean, leaderMs: number, fieldRuns: ReadonlyArray<string>): HTMLElement => {
-    const row = el("div", "tgp-row")
-    const dot = el("span", "tgp-dot")
-    // A run raced beside the ghost wears its ghost's tint.
-    const inField = fieldRuns.indexOf(entry.runId)
-    if (inField >= 0) dot.style.background = fieldTintCss(inField)
-    if (entry.mine) row.classList.add("tgp-mine")
-    if (entry.runId === raced || (entry.mine && ownRaced)) row.classList.add("tgp-raced")
-    row.append(el("span", "tgp-rank tgp-mono", String(entry.rank)), el("span", "tgp-name", entry.name.toUpperCase()), el("span", "tgp-time tgp-mono", formatTime(entry.timeMs)), el("span", "tgp-behind tgp-mono", entry.timeMs > leaderMs ? `+${((entry.timeMs - leaderMs) / 1000).toFixed(3)}` : ""), dot)
-    row.dataset["key"] = entry.mine ? "me" : `player:${entry.name}`
-    row.title = entry.mine ? "Race your best" : `Race ${entry.name}`
-    row.addEventListener("click", () => online.choose(entry.mine ? { kind: "own" } : { kind: "run", runId: entry.runId }))
-    return row
-  }
+  const choose = (choice: GhostChoice): void => online.choose(choice)
 
   /** The rows on screen now, by player, and how far down the window each is. */
   const rowTops = (): Map<string, number> => {
@@ -260,21 +218,23 @@ export const createPanels = (options: PanelsOptions): Panels => {
     boardCount.textContent = state.boardLoading && board === null ? "…" : board === null ? "" : `${board.total} ${board.total === 1 ? "DRIVER" : "DRIVERS"}`
     rows.replaceChildren()
     cols.hidden = board === null || board.top.length === 0
-    const raced = state.choice.kind === "run" ? state.choice.runId : null
-    const ownRaced = state.choice.kind === "own"
+    const marks = raceMarks(state.choice, state.fieldRuns)
+    // Only a board with more than it shows has more to show.
+    showAll.hidden = board === null || board.total <= board.top.length + board.around.length
+    showAll.textContent = board === null ? "" : `SHOW ALL ${board.total} DRIVERS`
     if (board === null) {
       rows.appendChild(el("div", "tgp-empty", state.boardLoading ? "LOADING…" : state.reachable === false ? "CAN'T REACH THE BOARD" : "NO BOARD YET"))
     } else if (board.top.length === 0) {
       rows.appendChild(el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST"))
     } else {
       const leaderMs = board.top[0]?.timeMs ?? 0
-      for (const entry of board.top) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs, state.fieldRuns))
+      for (const entry of board.top) rows.appendChild(drawRow(entry, marks, leaderMs, choose))
       const around = board.around.filter((entry) => !board.top.some((top) => top.runId === entry.runId))
       if (around.length > 0) {
         const last = board.top[board.top.length - 1]
         const first = around[0]
         if (last !== undefined && first !== undefined && first.rank > last.rank + 1) rows.appendChild(el("div", "tgp-gap", "···"))
-        for (const entry of around) rows.appendChild(drawRow(entry, raced, ownRaced, leaderMs, state.fieldRuns))
+        for (const entry of around) rows.appendChild(drawRow(entry, marks, leaderMs, choose))
       }
     }
     for (const { chip, choice } of ghostChips) chip.setAttribute("aria-pressed", String(sameChoice(choice, state.choice)))
@@ -425,7 +385,10 @@ export const createPanels = (options: PanelsOptions): Panels => {
 
   window.addEventListener("keydown", (event) => {
     if (!online.state().enabled || editable(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return
-    if (event.key === "l" || event.key === "L") {
+    if (all.open()) {
+      // The whole board closes first, back to the corner one.
+      if (event.key === "l" || event.key === "L" || event.key === "Escape") all.hide()
+    } else if (event.key === "l" || event.key === "L") {
       if (naming) closeName(false)
       else want(!boardUp())
     } else if (event.key === "Escape") {
@@ -455,6 +418,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
 
   return {
     typing: () => document.activeElement === input,
+    modal: () => all.open(),
     update(isRunning) {
       running = isRunning
       opener.classList.toggle("tgp-faded", running)
@@ -470,6 +434,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
     },
     lapStarted() {
       promptAt = -1
+      all.hide()
       if (naming) closeName(false)
       away = true
       apply()

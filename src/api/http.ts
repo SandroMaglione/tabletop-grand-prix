@@ -18,6 +18,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup"
 import * as HttpApiSchema from "effect/http-api/HttpApiSchema"
 import {
   Board,
+  BoardPage,
   Entry,
   Identity,
   Leaderboard,
@@ -97,6 +98,15 @@ export class RunsGroup extends HttpApiGroup.make("runs")
     })
   )
   .add(
+    HttpApiEndpoint.get("page", "/boards/:track/runs", {
+      params: { track: Schema.String },
+      query: { from: Schema.FiniteFromString, count: Schema.FiniteFromString },
+      headers: maybeSignedIn,
+      success: BoardPage,
+      error: NotFoundError
+    })
+  )
+  .add(
     HttpApiEndpoint.get("rival", "/boards/:track/rival", {
       params: { track: Schema.String },
       query: { fasterThanMs: Schema.optional(Schema.FiniteFromString) },
@@ -157,6 +167,7 @@ export const layerHttp = (baseUrl: string, options: HttpOptions = {}): Layer.Lay
         rename: (identity, name) => settle(client.players.rename({ headers: { authorization: authorization(identity) }, payload: { name } })),
         submit: (identity, replay) => settle(client.runs.submit({ headers: { authorization: authorization(identity) }, payload: { replay } })),
         board: (track, identity) => settle(client.runs.board({ params: { track }, headers: maybe(identity) })),
+        page: (track, from, count, identity) => settle(client.runs.page({ params: { track }, query: { from, count }, headers: maybe(identity) })),
         rival: (track, fasterThanMs, identity) =>
           settle(
             client.runs.rival({

@@ -18,7 +18,7 @@
  * server has answered for it. The outbox is sent again after every finish and on every visit.
  */
 import { Effect, Result } from "effect"
-import { type Board, type Entry, type Identity, Leaderboard, type LeaderboardShape, type NameRefused, type RunReplay, type Submitted, type Unavailable } from "../api/contract.ts"
+import { type Board, type BoardPage, type Entry, type Identity, Leaderboard, type LeaderboardShape, type NameRefused, type RunReplay, type Submitted, type Unavailable } from "../api/contract.ts"
 import { tidyName } from "../api/names.ts"
 import { Bests, type GhostChoice, Outbox, Rivals, type SavedRival } from "./boards.ts"
 import { ghostFromReplay, type Ghost, type LapGhost } from "./ghost.ts"
@@ -84,6 +84,8 @@ export interface Online {
   /** After every finished lap. */
   finished(result: FinishResult): void
   refreshBoard(): void
+  /** Up to `count` runs of this track's board from rank `from` on, for reading all of it; null when it cannot be had. */
+  page(from: number, count: number): Promise<BoardPage | null>
   choose(choice: GhostChoice): void
   /** How many ghosts to race (`fieldSizes`). */
   setField(count: number): void
@@ -519,6 +521,14 @@ export const createOnline = (options: OnlineOptions): Online => {
         })
     },
     refreshBoard,
+    async page(from, count) {
+      if (!enabled) return null
+      const got = await run(ask(timeoutMs, (lb) => lb.page(track, from, count, identity)))
+      if (got === undefined) return null
+      reached(got)
+      if (Result.isSuccess(got)) return got.success
+      return got.failure._tag === "NotFound" ? { track, rules, total: 0, from, entries: [] } : null
+    },
     setField(count) {
       field = fieldSizes.includes(count as 1) ? count : 1
       changed()

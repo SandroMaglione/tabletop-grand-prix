@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import { Effect, Exit, Redacted } from "effect"
 import * as HttpRouter from "effect/http/HttpRouter"
-import { type Identity, Leaderboard } from "../src/api/contract.ts"
+import { type Identity, Leaderboard, pageMax } from "../src/api/contract.ts"
 import { authorization, layerHttp } from "../src/api/http.ts"
 import { makeAdminClient } from "../src/server/admin-client.ts"
 import { serverLayer } from "../src/server/api.ts"
@@ -190,6 +190,47 @@ test("a board shows the top ten, and the asking player's run with two each side"
   // Seen by nobody, the same board has no `me` and no `around`.
   const anonymous = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null)))
   assert.deepEqual([anonymous.me, anonymous.around, anonymous.total], [null, [], 21])
+})
+
+test("the whole board reads a page at a time from any rank, the asking player's run marked", async () => {
+  const server = serve()
+  const me = await server.ok(register("Sandro"))
+  const mine = Math.floor(kept.timeMs)
+  // 250 runs ahead of mine, 49 behind: mine ranks 251 of 300.
+  for (let at = 0; at < 250; at++) server.seed(`Ahead${at}`, mine - 1000 + at)
+  for (let at = 0; at < 49; at++) server.seed(`Behind${at}`, mine + 1 + at)
+  await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
+  const page = (from: number, count: number, who: typeof me | null = me) => server.ok(Effect.flatMap(lb, (service) => service.page(track, from, count, who)))
+
+  const around = await page(249, 5)
+  assert.deepEqual([around.total, around.from, around.rules], [300, 249, rulesVersion])
+  assert.deepEqual(
+    around.entries.map((entry) => [entry.rank, entry.name, entry.mine]),
+    [
+      [249, "Ahead248", false],
+      [250, "Ahead249", false],
+      [251, "Sandro", true],
+      [252, "Behind0", false],
+      [253, "Behind1", false]
+    ]
+  )
+  // Seen by nobody, the same runs, none marked.
+  assert.ok((await page(249, 5, null)).entries.every((entry) => !entry.mine))
+  // A page holds at most `pageMax`, the end of the board fewer, and past it none.
+  const big = await page(1, 10_000)
+  assert.equal(big.entries.length, pageMax)
+  assert.deepEqual(
+    big.entries.slice(0, 2).map((entry) => entry.rank),
+    [1, 2]
+  )
+  assert.deepEqual(
+    (await page(296, 100)).entries.map((entry) => entry.rank),
+    [296, 297, 298, 299, 300]
+  )
+  assert.deepEqual((await page(301, 100)).entries, [])
+  // Ranks before the first read from the first.
+  assert.equal((await page(-5, 3)).from, 1)
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.page("nowhere", 1, 10, null))), { _tag: "NotFound" })
 })
 
 test("just under the top ten, `around` leaves out what `top` already shows", async () => {
