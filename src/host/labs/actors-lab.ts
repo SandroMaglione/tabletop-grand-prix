@@ -12,9 +12,13 @@
  * - `stress`: 80 props round the lap, all moving at once, for the frame rate.
  * - `jump`, `skid`, `boost`, `ghost`, `bridge`: made-up views and events, so each effect shows
  *   without the real simulation.
+ * - `podium`: the standings' liveries racing in a pack, gold leading, then silver, bronze, the
+ *   top five's red, the top ten's pearl and the field's grey (P1, 2, 3, 4, 7, 23), for
+ *   pictures. `&lead=` sets where the leader is (centreline distance).
  *
  * `?zoom=6` zooms the camera on the car (lab only) and turns the tilt-shift off unless `&sharp=0`.
  * `?focus=18` aims the zoomed camera at centreline distance 18 instead of the car.
+ * `?rank=1` paints the car for that place on the board and prints the place on its roof.
  * `?t=3` starts the demo clock 3 s in; with `&freeze=1` it stays there, for pictures. `?brake=1` holds the brakes in `still`.
  */
 import { PostEffect } from "@pixi/3d"
@@ -22,6 +26,7 @@ import { OutlinePass } from "@pixi/3d/extras"
 import { createSession, idleInput, locateNear, pointAt, track } from "../../sim/index.ts"
 import type { Bollard, CarView, DriveInput, LapView, PropKind, PropPlacement, PropView, RaceEvent, RaceView, SwingDoor, TrackData } from "../../sim/index.ts"
 import type { GhostPose } from "../contract.ts"
+import { createCar } from "../actors/car.ts"
 import { createActors } from "../actors/index.ts"
 import { palette } from "../palette.ts"
 import { createStage } from "../stage.ts"
@@ -104,6 +109,8 @@ const stressTrack = (): TrackData => {
 }
 const labTrack = demo === "gallery" ? galleryTrack() : demo === "stress" ? stressTrack() : track
 const actors = createActors(stage, labTrack)
+// `?rank=1` paints the car for that place on the board, with its plate.
+actors.standing(params.has("rank") ? Number(params.get("rank")) || null : demo === "podium" ? 1 : null)
 
 // A made-up view the scripted demos write into.
 const car: Mutable<CarView> = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road", drift: null }
@@ -479,7 +486,37 @@ const feature = (kind: string) => track.features.find((f) => f.kind === kind)
 /** One step of a scripted demo: writes the made-up view and queues events. */
 type Script = (t: number, dt: number) => void
 
+/** For `podium`: the pack behind the leader, each a car of its own: its place, and how far behind and aside it runs. */
+const PACK = [
+  { rank: 2, back: 3.4, side: 0.95 },
+  { rank: 3, back: 3.9, side: -1.05 },
+  { rank: 4, back: 7.4, side: 0.2 },
+  { rank: 7, back: 10.6, side: -0.9 },
+  { rank: 23, back: 13.6, side: 0.85 }
+] as const
+const pack =
+  demo === "podium"
+    ? PACK.map((one) => {
+        const model = createCar(stage.world)
+        model.standing(one.rank)
+        const view: Mutable<CarView> = { ...car }
+        return { ...one, model, view }
+      })
+    : []
+
 const scripts: Record<string, Script> = {
+  podium: (t, dt) => {
+    const lead = Number(params.get("lead") ?? "60") + t * 4
+    place(lead, 0.1, 22, 0)
+    car.steer = 0.15
+    car.throttle = 1
+    for (const one of pack) {
+      const p = pointAt(track, lead - one.back, one.side)
+      Object.assign(one.view, { x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, roll: p.bank, speed: 22, throttle: 1, steer: 0.12, s: lead - one.back })
+      one.model.update(one.view, dt)
+    }
+  },
+
   still: (t) => {
     place(track.length - 4, 0, 0, turntable ? t * 0.8 : 0)
     car.steer = turntable ? Math.sin(t * 1.3) : 0.8

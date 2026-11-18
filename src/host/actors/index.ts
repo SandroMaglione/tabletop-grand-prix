@@ -400,6 +400,10 @@ export const createActors = (stage: Stage, track: TrackData): Actors => {
       pads.update(dt)
       particles.step(dt)
       marker.update(c, dt)
+    },
+
+    standing(rank) {
+      car.standing(rank)
     }
   }
 }
