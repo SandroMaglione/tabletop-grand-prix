@@ -18,6 +18,7 @@ import { layerFake } from "../src/host/online/fake.ts"
 import fixture from "../src/host/online/fake-runs.json" with { type: "json" }
 import { layer as profileLayer } from "../src/host/profile.ts"
 import { createRerun } from "../src/host/rerun.ts"
+import { compareSectors, createSplits, sectorTimes } from "../src/host/splits.ts"
 import { standingOf } from "../src/host/standing.ts"
 import { botInput, createSession, idleInput, quantise, replayFromText, rulesVersion, runReplay, tracks, type DriveInput, type RaceView, type TrackEntry } from "../src/sim/index.ts"
 
@@ -295,5 +296,48 @@ test("a run of the board is watched without racing it: its own lap, its place, l
   // The lap just driven, shown again, is no run of the board.
   assert.ok(rerun.start(got.replay))
   assert.equal(rerun.watched(), null)
+  await app.dispose()
+})
+
+test("sectors: each line's time less the one before, the finish filled in, the worst loss picked", () => {
+  assert.deepEqual(sectorTimes([8000, 15000, 23000], 23000, 3), [8000, 7000, 8000])
+  assert.deepEqual(sectorTimes([8000, 15000], 23000, 3), [8000, 7000, 8000], "splits that leave out the finish end on the lap's time")
+  const compared = compareSectors([8100, 6900, 8400], [8000, 7000, 8000])
+  assert.deepEqual(compared.sectors.map((one) => one.deltaMs), [100, -100, 400])
+  assert.equal(compared.worst, 2)
+  assert.equal(compareSectors([7900, 6900], [8000, 7000]).worst, -1, "faster everywhere: no sector to work on")
+  assert.deepEqual(compareSectors([8000, 7000], null), { sectors: [{ ms: 8000, deltaMs: null }, { ms: 7000, deltaMs: null }], worst: -1 }, "the fastest has nothing above")
+})
+
+test("a run's splits against the run above, from both replays, the run above asked for when not given", async () => {
+  const store = await memoryStore()
+  const { app, run } = page(store, layerFake({ storage: null, latencyMs: 0 }))
+  const laps = createLaps(entry.id, null, () => "car")
+  const online = start(run, laps)
+  await until("the board", () => online.state().board !== null && !online.state().ghostLoading)
+  const splits = createSplits(online, entry.data.checkpoints.length, (work) => work())
+  const top = online.state().board?.top ?? []
+  const [first, second, third] = top
+  assert.ok(first !== undefined && second !== undefined && third !== undefined)
+  const sum = (values: ReadonlyArray<number>): number => values.reduce((a, b) => a + b, 0)
+
+  assert.equal(splits.known(third, second), null, "nothing driven yet")
+  const given = await splits.load(third, second)
+  assert.ok(given !== null)
+  assert.equal(given.above?.runId, second.runId)
+  assert.equal(given.sectors.length, entry.data.checkpoints.length)
+  assert.ok(Math.abs(sum(given.sectors.map((one) => one.ms)) - third.timeMs) < 1, "its sectors add up to its board time")
+  assert.ok(Math.abs(sum(given.sectors.map((one) => one.deltaMs ?? 0)) - (third.timeMs - second.timeMs)) < 1, "the gaps add up to the gap on the board")
+  assert.ok(given.worst >= 0, "a slower run loses somewhere")
+  assert.equal(given.sectors[given.worst]?.deltaMs, Math.max(...given.sectors.map((one) => one.deltaMs ?? 0)))
+  assert.deepEqual(splits.known(third, second), given, "once driven, drawn at once")
+
+  const asked = await splits.load(third, null)
+  assert.equal(asked?.above?.runId, second.runId, "the run above, asked of the board")
+  assert.deepEqual(splits.known(third, null), asked)
+
+  const fastest = await splits.load(first, null)
+  assert.equal(fastest?.above, null)
+  assert.ok(fastest?.sectors.every((one) => one.deltaMs === null))
   await app.dispose()
 })

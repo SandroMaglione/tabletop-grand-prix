@@ -1,12 +1,13 @@
 /**
  * What the leaderboard's DOM panels share (`panels.ts`, `board-all.ts`): making elements,
  * buttons that leave the keyboard to the car, the HUD's colours as CSS variables, and one
- * run drawn as a row.
+ * run drawn as a row, with its splits dropping down under it.
  */
 import type { Entry } from "../api/contract.ts"
 import type { GhostChoice } from "./boards.ts"
 import { formatTime, panelAlpha } from "./hud.ts"
 import { palette } from "./palette.ts"
+import type { RunSplits, Splits } from "./splits.ts"
 import { fieldTintCss } from "./tints.ts"
 
 const hex = (colour: number): string => `#${colour.toString(16).padStart(6, "0")}`
@@ -69,16 +70,101 @@ export const markRow = (row: HTMLElement, marks: RaceMarks): void => {
   if (dot !== null) dot.style.background = inField >= 0 ? fieldTintCss(inField) : ""
 }
 
+/** What a board's rows do, and which of them have their splits open (kept across draws and both boards). */
+export interface RowActions {
+  readonly choose: (choice: GhostChoice) => void
+  readonly watch: (entry: Entry) => void
+  readonly splits: Splits
+  /** The runs whose splits are open, by id. */
+  readonly open: Set<string>
+}
+
+const signed = (ms: number): string => `${ms > 0 ? "+" : ms < 0 ? "−" : "±"}${(Math.abs(ms) / 1000).toFixed(3)}`
+const tone = (ms: number | null): string => (ms === null || ms === 0 ? "" : ms > 0 ? "tgp-bad" : "tgp-good")
+
+/**
+ * Fills `node` with a run's sectors, one row each on the board's own columns: the sector,
+ * its time under BEST, and what it gains or loses on the run just above under GAP. The
+ * row is tinted, faintly, red where it loses and green where it gains; the name of the sector
+ * losing the most is in red.
+ */
+const fillSplits = (node: HTMLElement, splits: RunSplits): void => {
+  node.replaceChildren(
+    ...splits.sectors.map((sector, i) => {
+      const gain = sector.deltaMs === null || sector.deltaMs === 0 ? "" : sector.deltaMs > 0 ? " tgp-sector-slower" : " tgp-sector-faster"
+      const line = el("div", `tgp-sector${gain}${i === splits.worst ? " tgp-sector-worst" : ""}`)
+      line.append(
+        el("span", "tgp-rank tgp-mono", `S${i + 1}`),
+        el("span", "tgp-name"),
+        el("span", "tgp-time tgp-mono", formatTime(sector.ms)),
+        el("span", `tgp-behind tgp-mono ${tone(sector.deltaMs)}`, sector.deltaMs === null ? "" : signed(sector.deltaMs))
+      )
+      return line
+    })
+  )
+  node.title = splits.above === null ? "The fastest lap's sectors" : `Against P${splits.above.rank} ${splits.above.name}, the run just above`
+}
+
+const waiting = (text: string): HTMLElement => {
+  const line = el("div", "tgp-sector tgp-sector-wait")
+  line.append(el("span"), el("span", "tgp-name", text))
+  return line
+}
+
+/** A run's splits, under its row: drawn at once when known, else filled in once both laps are driven. */
+const drawSplits = (entry: Entry, above: Entry | null, splits: Splits): HTMLElement => {
+  const node = el("div", "tgp-row-splits")
+  const known = splits.known(entry, above)
+  if (known !== null) {
+    fillSplits(node, known)
+    return node
+  }
+  node.appendChild(waiting("DRIVING THE LAPS…"))
+  void splits.load(entry, above).then((got) => {
+    if (got === null) node.replaceChildren(waiting("CAN'T LOAD THE SPLITS"))
+    else fillSplits(node, got)
+  })
+  return node
+}
+
+/**
+ * A run as its row, and its splits under it when they are open. `above` is the run just above
+ * it when the caller has it (the board is asked otherwise).
+ */
+export const drawEntry = (entry: Entry, above: Entry | null, marks: RaceMarks, leaderMs: number, actions: RowActions): DocumentFragment => {
+  const fragment = document.createDocumentFragment()
+  const row = drawRow(entry, marks, leaderMs, actions, () => {
+    const next = row.nextElementSibling
+    if (actions.open.delete(entry.runId)) {
+      if (next instanceof HTMLElement && next.classList.contains("tgp-row-splits")) next.remove()
+    } else {
+      actions.open.add(entry.runId)
+      row.after(drawSplits(entry, above, actions.splits))
+    }
+    row.classList.toggle("tgp-open", actions.open.has(entry.runId))
+  })
+  fragment.appendChild(row)
+  if (actions.open.has(entry.runId)) {
+    row.classList.add("tgp-open")
+    fragment.appendChild(drawSplits(entry, above, actions.splits))
+  }
+  return fragment
+}
+
 /**
  * One run as a bar: its place, its driver, its time, how far it is behind the fastest
- * (`leaderMs`), and a button to watch it. A click on the bar races it (`choose`); on the
- * button, watches it without racing (`watch`).
+ * (`leaderMs`), a button to watch it, and one to open its splits. A click on the bar races
+ * it (`choose`); on ▶, watches it without racing (`watch`); on ▾, opens or closes its splits.
  */
-export const drawRow = (entry: Entry, marks: RaceMarks, leaderMs: number, choose: (choice: GhostChoice) => void, watch: (entry: Entry) => void): HTMLElement => {
+const drawRow = (entry: Entry, marks: RaceMarks, leaderMs: number, actions: RowActions, toggle: () => void): HTMLElement => {
+  const { choose, watch } = actions
   const row = el("div", "tgp-row")
   const watchButton = button("tgp-watch", "▶", () => watch(entry))
   watchButton.title = entry.mine ? "Watch your best" : `Watch ${entry.name}`
   watchButton.setAttribute("aria-label", watchButton.title)
+  const splitsButton = button("tgp-open-splits", "▾", toggle)
+  splitsButton.title = entry.rank > 1 ? "Splits against the run above" : "Splits"
+  splitsButton.setAttribute("aria-label", splitsButton.title)
   if (entry.mine) row.classList.add("tgp-mine")
   row.append(
     el("span", "tgp-rank tgp-mono", String(entry.rank)),
@@ -86,10 +172,12 @@ export const drawRow = (entry: Entry, marks: RaceMarks, leaderMs: number, choose
     el("span", "tgp-time tgp-mono", formatTime(entry.timeMs)),
     el("span", "tgp-behind tgp-mono", entry.timeMs > leaderMs ? `+${((entry.timeMs - leaderMs) / 1000).toFixed(3)}` : ""),
     el("span", "tgp-dot"),
-    watchButton
+    watchButton,
+    splitsButton
   )
   row.dataset["key"] = entry.mine ? "me" : `player:${entry.name}`
   row.dataset["run"] = entry.runId
+  row.dataset["rank"] = String(entry.rank)
   row.title = entry.mine ? "Race your best" : `Race ${entry.name}`
   row.addEventListener("click", () => choose(entry.mine ? { kind: "own" } : { kind: "run", runId: entry.runId }))
   markRow(row, marks)

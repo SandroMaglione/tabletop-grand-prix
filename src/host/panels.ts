@@ -7,7 +7,9 @@
  *   runs (a click races one, its ▶ watches it without racing), the player's own with its neighbours, the total, which ghost to race (next closest,
  *   their best, none, or any row clicked), the player's name with "change", and the tracks
  *   when there is more than one.
- *   Under the rows, SHOW ALL opens the whole board in the middle of the window (`board-all.ts`).
+ *   Each row's ▾ drops its splits down under it: each sector's time and what it gains or
+ *   loses on the run just above, the worst lit (`splits.ts`). Under the rows, SHOW ALL opens
+ *   the whole board in the middle of the window (`board-all.ts`).
  * - closed: one small panel, `L BOARD #12/340`, that fades while a lap runs.
  * - the name: a field with an answer as the player types, `RANDOM` for a made-up one
  *   (`handles.ts`), save, and cancel. Nobody has to open it: a new player is given a made-up
@@ -34,7 +36,8 @@ import type { GhostChoice } from "./boards.ts"
 import { makeHandle } from "./handles.ts"
 import { answerStatus, checking, type NameStatus, saving, shapeStatus } from "./name-messages.ts"
 import { fieldSizes, type Online } from "./online.ts"
-import { button, drawRow, el, raceMarks, setHudColours } from "./panels-dom.ts"
+import { button, drawEntry, el, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
+import type { Splits } from "./splits.ts"
 import "./panels.css"
 
 export interface Panels {
@@ -70,6 +73,8 @@ export interface PanelsOptions {
   readonly keepField: (count: number) => void
   /** The player asked to watch a run of the board, without racing it. */
   readonly watch: (entry: Entry) => void
+  /** Each run's sectors against the run above it. */
+  readonly splits: Splits
 }
 
 const sameChoice = (a: GhostChoice, b: GhostChoice): boolean => a.kind === b.kind && (a.kind !== "run" || (b.kind === "run" && a.runId === b.runId))
@@ -84,7 +89,10 @@ export const createPanels = (options: PanelsOptions): Panels => {
     all.hide()
     options.watch(entry)
   }
-  const all = createAllBoard(online, (entry) => watch(entry))
+  /** The runs whose splits are open, on this board and the whole one alike, for the visit. */
+  const openSplits = new Set<string>()
+  const rowActions: RowActions = { choose: (choice) => online.choose(choice), watch: (entry) => watch(entry), splits: options.splits, open: openSplits }
+  const all = createAllBoard(online, rowActions)
 
   /** The player keeps the board up. */
   let wanted = options.shown
@@ -125,7 +133,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   boardHead.append(boardTitle, boardCount, button("tgp-x", "×", () => want(false)))
   const trackLine = el("div", "tgp-line")
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"))
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"), el("span"))
   const rows = el("div", "tgp-rows")
   const showAll = button("tgp-all-open", "SHOW ALL", () => all.show())
   const ghostLine = el("div", "tgp-line")
@@ -172,8 +180,6 @@ export const createPanels = (options: PanelsOptions): Panels => {
   } else {
     trackLine.hidden = true
   }
-
-  const choose = (choice: GhostChoice): void => online.choose(choice)
 
   /** The rows on screen now, by player, and how far down the window each is. */
   const rowTops = (): Map<string, number> => {
@@ -237,13 +243,16 @@ export const createPanels = (options: PanelsOptions): Panels => {
       rows.appendChild(el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST"))
     } else {
       const leaderMs = board.top[0]?.timeMs ?? 0
-      for (const entry of board.top) rows.appendChild(drawRow(entry, marks, leaderMs, choose, watch))
+      board.top.forEach((entry, i) => rows.appendChild(drawEntry(entry, board.top[i - 1] ?? null, marks, leaderMs, rowActions)))
       const around = board.around.filter((entry) => !board.top.some((top) => top.runId === entry.runId))
       if (around.length > 0) {
         const last = board.top[board.top.length - 1]
         const first = around[0]
         if (last !== undefined && first !== undefined && first.rank > last.rank + 1) rows.appendChild(el("div", "tgp-gap", "···"))
-        for (const entry of around) rows.appendChild(drawRow(entry, marks, leaderMs, choose, watch))
+        around.forEach((entry, i) => {
+          const before = i === 0 ? last : around[i - 1]
+          rows.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, marks, leaderMs, rowActions))
+        })
       }
     }
     for (const { chip, choice } of ghostChips) chip.setAttribute("aria-pressed", String(sameChoice(choice, state.choice)))

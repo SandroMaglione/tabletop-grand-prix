@@ -6,8 +6,8 @@
   position: fixed;
   top: 12px;
   right: 12px;
-  /* Wide enough for the longest name (16 letters) beside a time, a gap and the watch button. */
-  width: 400px;
+  /* Wide enough for the longest name (16 letters) beside a time, a gap and the row's two buttons. */
+  width: 420px;
   transform-origin: top right;
   display: flex;
   flex-direction: column;
@@ -86,9 +86,9 @@
 /* The board as a table: column names, then each run as its own bar. The player's bar is lit. */
 .tgp-cols, .tgp-row {
   display: grid;
-  grid-template-columns: 30px 1fr 68px 58px 10px 20px;
+  grid-template-columns: 30px 1fr 68px 58px 10px 20px 18px;
   align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
 }
 .tgp-cols { padding: 9px 10px 5px 6px; font-size: 10px; font-weight: 700; color: var(--hud-dim); }
 .tgp-cols span:nth-child(1) { text-align: center; }
@@ -151,6 +151,47 @@
 }
 .tgp-row:hover .tgp-watch { opacity: 0.8; }
 .tgp-row .tgp-watch:hover { opacity: 1; background: var(--hud-accent); color: var(--hud-back); }
+/* A run's splits, dropped down under its row: each sector's time and what it gains or loses on the run above. */
+.tgp-open-splits {
+  width: 18px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.4;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.tgp-row:hover .tgp-open-splits { opacity: 0.8; }
+.tgp-row .tgp-open-splits:hover { opacity: 1; background: rgba(255, 255, 255, 0.18); }
+.tgp-row.tgp-open .tgp-open-splits { opacity: 1; transform: rotate(180deg); }
+.tgp-row-splits { display: flex; flex-direction: column; gap: 2px; }
+/* A sector as a slim row on the board's columns, under its run. */
+.tgp-sector {
+  display: grid;
+  grid-template-columns: 30px 1fr 68px 58px 10px 20px 18px;
+  align-items: center;
+  column-gap: 6px;
+  height: 22px;
+  padding: 0 4px 0 0;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 3px;
+}
+.tgp-sector .tgp-rank { align-self: stretch; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--hud-dim); }
+.tgp-sector .tgp-name { font-size: 10px; color: var(--hud-dim); letter-spacing: 1px; }
+.tgp-sector .tgp-time, .tgp-sector .tgp-behind { text-align: right; font-size: 11px; }
+.tgp-sector .tgp-time { color: var(--hud-dim); }
+/* A faint tint: red where the sector loses on the run above, green where it gains. */
+.tgp-sector.tgp-sector-slower { background: color-mix(in srgb, var(--hud-bad) 14%, rgba(0, 0, 0, 0.22)); }
+.tgp-sector.tgp-sector-faster { background: color-mix(in srgb, var(--hud-good) 12%, rgba(0, 0, 0, 0.22)); }
+/* The sector losing the most, the one to work on: its name in red. */
+.tgp-sector.tgp-sector-worst .tgp-rank { color: var(--hud-bad); font-weight: 700; }
+.tgp-sector-wait .tgp-name { grid-column: 2 / -1; }
 .tgp-gap { height: 8px; display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 10px; letter-spacing: 3px; }
 .tgp-empty { padding: 14px 10px; font-size: 12px; color: var(--hud-dim); text-align: center; }
 
