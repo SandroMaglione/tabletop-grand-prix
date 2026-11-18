@@ -28,6 +28,15 @@ export const palette = {
   /** The car and its ghost. */
   car: 0xe4572e,
   carStripe: 0xf7f3ea,
+  /** The car's paint for a place on the board (`standing.ts`): the podium, and the rest of the top ten. */
+  paintGold: 0xf6b422,
+  paintSilver: 0xc4cedb,
+  paintBronze: 0xec8a3f,
+  paintPearl: 0x3657e6,
+  /** Below the top ten: flat and unpolished. */
+  paintDull: 0x8a8f97,
+  /** The podium cars' stripe: glossy and dark, so the metal round it reads brighter. */
+  podiumStripe: 0x15171c,
   glass: 0x2a3440,
   tyre: 0x232427,
   ghost: 0x6fa8dc,

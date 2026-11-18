@@ -154,6 +154,8 @@ const ghost = createGhost()
 // More ghosts beside the raced one: the board's runs just ahead, up to the player's pick (1, 5
 // or 10). Dev builds only: `?ghosts=100` races a crowd of bot laps instead, to see how many the
 // page can draw.
+// Dev builds only: `?rank=3` shows the car as if the player held that place on the board.
+const rankPreview = import.meta.env.DEV && params.has("rank") ? Number(params.get("rank")) || null : null
 const crowdCount = import.meta.env.DEV && params.has("ghosts") ? Math.max(0, Math.min(1000, Number(params.get("ghosts") || 100) || 0)) : 0
 const field = createField(stage.world, crowdCount > 0 ? { crowd: { track: entry.id, count: crowdCount } } : {})
 const passTags = createPassTags(stage, track)
@@ -341,6 +343,7 @@ const loop = FixedLoop.start({
     }
     scene.update(shown, seconds)
     const ghostPose = ghost.pose(shown, view.lap.phase === "running")
+    actors.standing(rankPreview ?? online.state().rank?.rank ?? null)
     actors.update(shown, ghostPose, seconds)
     field.update(shown, view.lap.phase === "running")
     const raced = ghost.current()

@@ -16,6 +16,9 @@ import type { Geometry3D } from "@pixi/3d"
 import type { CarView } from "../../sim/index.ts"
 import type { GhostPose } from "../contract.ts"
 import { palette } from "../palette.ts"
+import { standingOf } from "../standing.ts"
+import { liveries, placeShine } from "./paint.ts"
+import { createRaceNumber } from "./race-number.ts"
 import { approach, clamp } from "./pose.ts"
 import { roundedBox } from "./shapes.ts"
 
@@ -210,6 +213,21 @@ export const createCar = (parent: Container3D) => {
   const model = buildCar(look, false)
   parent.addChild(model.root)
   const brakeGlow = look.brake.emissive
+  // The livery shows the player's place on the board: every part in the body's paint, the
+  // stripe's and the hubs' takes the standing's.
+  const wear = liveries(look)
+  const parts = { body: [] as Array<Mesh3D>, stripe: [] as Array<Mesh3D>, hub: [] as Array<Mesh3D> }
+  model.root.traverse((node) => {
+    if (!(node instanceof Mesh3D)) return
+    if (node.material === look.body) parts.body.push(node)
+    else if (node.material === look.stripe) parts.stripe.push(node)
+    else if (node.material === look.hub) parts.hub.push(node)
+  })
+  let livery = wear.unplaced
+  const raceNumber = createRaceNumber(model.body)
+  // The podium's glow on the road under the car.
+  const glow = new PointLight({ intensity: 0, range: 2.6, visible: false, position: { x: 0, y: 0.12, z: 0 }, parent: model.roll })
+  let glowTime = 0
   // The brake lights are real lights too: a red glow thrown on the road behind the car while
   // it brakes. Off (and free) the rest of the time.
   const brakeLight = new PointLight({ color: palette.brakeGlow, intensity: 0, range: 3.6, visible: false, position: { x: 0, y: 0.55, z: -1.75 }, parent: model.body })
@@ -241,6 +259,18 @@ export const createCar = (parent: Container3D) => {
   let hopped = false
   return {
     model,
+    /** Paints the car for the player's place on the board (null without one), and prints the place on its roof. */
+    standing(rank: number | null) {
+      raceNumber.show(rank)
+      const next = wear[standingOf(rank)]
+      if (next === livery) return
+      livery = next
+      for (const mesh of parts.body) mesh.material = next.body
+      for (const mesh of parts.stripe) mesh.material = next.stripe
+      for (const mesh of parts.hub) mesh.material = next.hub
+      glow.visible = next.glow !== null
+      if (next.glow !== null) glow.color = next.glow
+    },
     /** Starts the pop-in from nothing. */
     popIn() {
       pop = 0
@@ -281,6 +311,12 @@ export const createCar = (parent: Container3D) => {
     update(car: CarView, seconds: number) {
       const dt = Math.min(seconds, 0.05)
       pose(model, car.x, car.y, car.z, car.yaw, car.pitch, car.roll)
+      placeShine(livery.body, car.x, car.y, car.z, car.yaw)
+      if (glow.visible) {
+        // A slow breath, so it reads as a glow and not a lamp.
+        glowTime += dt
+        glow.intensity = 5 + Math.sin(glowTime * 2.2) * 1.2
+      }
       pop = Math.min(1, pop + dt / 0.32)
       model.root.scale.set(popScale(pop))
 

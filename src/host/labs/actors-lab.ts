@@ -15,6 +15,7 @@
  *
  * `?zoom=6` zooms the camera on the car (lab only) and turns the tilt-shift off unless `&sharp=0`.
  * `?focus=18` aims the zoomed camera at centreline distance 18 instead of the car.
+ * `?rank=1` paints the car for that place on the board and prints the place on its roof.
  * `?t=3` starts the demo clock 3 s in; with `&freeze=1` it stays there, for pictures. `?brake=1` holds the brakes in `still`.
  */
 import { PostEffect } from "@pixi/3d"
@@ -104,6 +105,8 @@ const stressTrack = (): TrackData => {
 }
 const labTrack = demo === "gallery" ? galleryTrack() : demo === "stress" ? stressTrack() : track
 const actors = createActors(stage, labTrack)
+// `?rank=1` paints the car for that place on the board, with its plate.
+actors.standing(params.has("rank") ? Number(params.get("rank")) || null : null)
 
 // A made-up view the scripted demos write into.
 const car: Mutable<CarView> = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, slip: 0, throttle: 0, brake: 0, grounded: true, boosting: false, s: 0, surface: "road", drift: null }

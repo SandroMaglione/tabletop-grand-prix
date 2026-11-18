@@ -52,4 +52,6 @@ export interface Actors {
   handle(event: RaceEvent, view: RaceView): void
   /** Once per drawn frame. `ghost` is null when there is no best lap to show. */
   update(view: RaceView, ghost: GhostPose | null, seconds: number): void
+  /** The player's place on the board, or null without one: the car's paint and the number on its roof. */
+  standing(rank: number | null): void
 }
