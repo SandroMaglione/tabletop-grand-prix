@@ -20,7 +20,10 @@
  * (`laps.ts`), so a finished lap is a replay. After the finish the brand wipes across the
  * window and behind it the page cuts to that replay, driven again in a second session
  * (`rerun.ts`): the actors, the scene and the engine sound follow it, the board opens beside
- * it, and the live car waits out of sight until the player starts again. What the page keeps (settings, name, best lap,
+ * it, and the live car waits out of sight until the player starts again. The same picture
+ * shows a run picked from the board with its ▶ (`watchRun`): that driver's lap, their car
+ * painted for their place, with no ghost beside it and the board folded away, until the
+ * player starts again (`R`) or picks another run. What the page keeps (settings, name, best lap,
  * rival, runs waiting to be sent) is on Effect services over one store (`storage.ts`); the
  * leaderboard is the `Leaderboard` service, chosen here:
  * - `?server=fake`: the stand-in in the page (`online/fake.ts`), `?server=down` one that never answers;
@@ -30,7 +33,7 @@
 import { Clock, FixedLoop, Result } from "@typeonce/ritmo"
 import { BrowserTickSource, BrowserVisibility } from "@typeonce/ritmo-browser"
 import { Effect, Layer, ManagedRuntime } from "effect"
-import type { Leaderboard } from "../api/contract.ts"
+import type { Entry, Leaderboard } from "../api/contract.ts"
 import { layerHttp } from "../api/http.ts"
 import { createSession, idleInput, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
 import { createActors } from "./actors/index.ts"
@@ -52,7 +55,7 @@ import { createOnline, type Online, type OnlineServices } from "./online.ts"
 import { createPanels } from "./panels.ts"
 import { Profile, layer as profileLayer } from "./profile.ts"
 import { createReplayLook } from "./replay-look.ts"
-import { createRerun, type Rerun } from "./rerun.ts"
+import { createRerun, type Rerun, type WatchedRun } from "./rerun.ts"
 import { Settings, layer as settingsLayer } from "./settings.ts"
 import { createStage } from "./stage.ts"
 import { storageLayer, takeLegacySettings } from "./storage.ts"
@@ -185,7 +188,8 @@ const panels = createPanels({
   switchTrack,
   shown: loaded?.settings.board ?? true,
   keep: (board) => void run(Settings.use((settings) => settings.change({ board }))),
-  keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 })))
+  keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 }))),
+  watch: (entry) => watchRun(entry)
 })
 /** The wipe covers the window: cut to the lap just driven, and open the board beside it. */
 const showLapAgain = (): void => {
@@ -194,6 +198,23 @@ const showLapAgain = (): void => {
   if (finish.replay !== null) rerun.start(finish.replay)
   panels.lapShown()
 }
+/** Drops a watched run's replay that arrives after another was asked for, or after the player started again. */
+let watchRequest = 0
+/**
+ * A run of the board on screen in the race's place, painted for its place, with the board
+ * folded away. Only starting again (`R`, which drops the replay like any reset) or another
+ * run ends it.
+ */
+const watchRun = (entry: Entry): void => {
+  const request = ++watchRequest
+  const watched: WatchedRun = { runId: entry.runId, name: entry.name, rank: entry.rank, timeMs: entry.timeMs, mine: entry.mine }
+  void online.replay(entry.runId).then((got) => {
+    if (request !== watchRequest) return
+    if (got === null || !rerun.start(got.replay, watched)) hud.toast("can't load that lap")
+    else panels.watchStarted()
+  })
+}
+
 const hud = createHud(
   stage,
   track,
@@ -283,7 +304,8 @@ const step = (): void => {
   if (finish !== null) online.finished(finish)
   for (const event of events) {
     if (event.kind === "reset") {
-      // Starting again is immediate: the replay, its board and what it left for this frame go.
+      // Starting again is immediate: the replay (or the run watched), its board and what it left for this frame go.
+      watchRequest++
       rerun.stop()
       replayed = []
       panels.lapReset()
@@ -323,6 +345,7 @@ const loop = FixedLoop.start({
     lastFrame = nowMs
     const view = session.view()
     const replaying = rerun.active()
+    const watched = rerun.watched()
     // What is drawn: the lap shown again, or the player's race.
     const shown = replaying ? rerun.view() : view
     const events = pending
@@ -342,16 +365,18 @@ const loop = FixedLoop.start({
       if (heardAgain(event)) audio.handle(event, shown, null)
     }
     scene.update(shown, seconds)
-    const ghostPose = ghost.pose(shown, view.lap.phase === "running")
-    actors.standing(rankPreview ?? online.state().rank?.rank ?? null)
+    // A watched run is shown alone: no ghost and no field beside it, its car in its own place's paint.
+    const racedPose = ghost.pose(shown, view.lap.phase === "running")
+    const ghostPose = watched === null ? racedPose : null
+    actors.standing(watched?.rank ?? rankPreview ?? online.state().rank?.rank ?? null)
     actors.update(shown, ghostPose, seconds)
-    field.update(shown, view.lap.phase === "running")
-    const raced = ghost.current()
+    field.update(shown, view.lap.phase === "running", watched === null)
+    const raced = watched === null ? ghost.current() : null
     // Passing your own best gets no tag: it would only say your name, right over your car (the
     // ghost drives your line), and the delta already tells you are ahead.
     const racedTag = raced === null || raced.kind === "own" ? "" : raced.name
     passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: racedTag, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
-    hud.update(view, { pad: padLabel, car: shown.car, replay: replaying }, seconds)
+    hud.update(view, { pad: padLabel, car: shown.car, replay: watched !== null ? { kind: "run", run: watched } : replaying ? { kind: "lap" } : null }, seconds)
     panels.update(view.lap.phase === "running")
     replayLook.show(replaying)
     audio.update(shown)

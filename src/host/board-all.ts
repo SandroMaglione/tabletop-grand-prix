@@ -1,8 +1,8 @@
 /**
  * The whole board, in the middle of the window: opened from the corner board's SHOW ALL, it
  * lands on the player's own run (the top when they have none) and reads more of the board,
- * a page at a time, as the list is scrolled toward either end. A click on a run races it, as
- * on the corner board.
+ * a page at a time, as the list is scrolled toward either end. A click on a run races it, and
+ * its ▶ watches it (closing the list), as on the corner board.
  *
  * It is modal: while it is open the car is left alone (`open()` is read by the page), and the
  * arrows, Page Up/Down, Home and End scroll the list. The cross, `Esc`, `L` and a click
@@ -27,7 +27,7 @@ export interface AllBoard {
   hide(): void
 }
 
-export const createAllBoard = (online: Online): AllBoard => {
+export const createAllBoard = (online: Online, watch: (entry: Entry) => void): AllBoard => {
   const root = el("div", "tgp-all")
   setHudColours(root)
   root.hidden = true
@@ -36,7 +36,7 @@ export const createAllBoard = (online: Online): AllBoard => {
   const count = el("span", "tgp-count")
   head.append(el("span", "tgp-title", "LEADERBOARD"), count, button("tgp-x", "×", () => hide()))
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"))
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"))
   const list = el("div", "tgp-rows tgp-all-rows")
   const topLine = el("div", "tgp-all-more")
   const bottomLine = el("div", "tgp-all-more")
@@ -81,7 +81,7 @@ export const createAllBoard = (online: Online): AllBoard => {
       // The board may have moved between two reads: a run already drawn is not drawn twice.
       if (shown.has(entry.runId)) continue
       shown.add(entry.runId)
-      fragment.appendChild(drawRow(entry, now, leaderMs, (choice) => online.choose(choice)))
+      fragment.appendChild(drawRow(entry, now, leaderMs, (choice) => online.choose(choice), watch))
     }
     return fragment
   }

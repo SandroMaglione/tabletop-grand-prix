@@ -17,6 +17,8 @@ import { layerDown } from "../src/host/online/down.ts"
 import { layerFake } from "../src/host/online/fake.ts"
 import fixture from "../src/host/online/fake-runs.json" with { type: "json" }
 import { layer as profileLayer } from "../src/host/profile.ts"
+import { createRerun } from "../src/host/rerun.ts"
+import { standingOf } from "../src/host/standing.ts"
 import { botInput, createSession, idleInput, quantise, replayFromText, rulesVersion, runReplay, tracks, type DriveInput, type RaceView, type TrackEntry } from "../src/sim/index.ts"
 
 const entry = tracks[0] as TrackEntry
@@ -252,5 +254,46 @@ test("the next closest rival is the slowest run still faster than the player's b
   await until("the own best", () => ghost.current()?.kind === "own")
   online.choose({ kind: "none" })
   await until("no ghost", () => ghost.current() === null)
+  await app.dispose()
+})
+
+test("a run of the board is watched without racing it: its own lap, its place, looping until stopped", async () => {
+  const store = await memoryStore()
+  const { app, run } = page(store, layerFake({ storage: null, latencyMs: 0 }))
+  const laps = createLaps(entry.id, null, () => "car")
+  const ghost = createGhost()
+  const online = createOnline({ enabled: true, run, track: entry.id, rules: rulesVersion, laps, ghost, identity: null, asked: true, rival: noRival, tracks: [entry.id], defer: (work) => work() })
+  online.start()
+  await until("the board", () => online.state().board !== null && !online.state().ghostLoading)
+  const picked = online.state().board?.top[2]
+  assert.ok(picked !== undefined)
+  const choice = online.state().choice
+  const got = await online.replay(picked.runId)
+  assert.ok(got !== null)
+  assert.equal(got.name, picked.name)
+  assert.deepEqual(online.state().choice, choice, "watching a run does not race it")
+  assert.equal(await online.replay("no-such-run"), null)
+
+  const rerun = createRerun(entry.data)
+  const watched = { runId: picked.runId, name: picked.name, rank: picked.rank, timeMs: picked.timeMs, mine: picked.mine }
+  assert.ok(rerun.start(got.replay, watched))
+  assert.deepEqual(rerun.watched(), watched)
+  assert.equal(standingOf(rerun.watched()?.rank ?? null), "third", "the car wears the place of the run watched")
+  let finishMs: number | null = null
+  let starts = 0
+  for (let tick = 0; tick < 120 * 120 && starts < 2; tick++) {
+    for (const event of rerun.tick()) {
+      if (event.kind === "finish") finishMs = event.timeMs
+      if (event.kind === "reset") starts++
+    }
+  }
+  assert.equal(Math.floor(finishMs ?? 0), picked.timeMs, "the watched lap is the one the board filed (in whole milliseconds)")
+  assert.equal(starts, 2, "it starts again from the line")
+  assert.deepEqual(rerun.watched(), watched, "and is still the watched run")
+  rerun.stop()
+  assert.equal(rerun.watched(), null)
+  // The lap just driven, shown again, is no run of the board.
+  assert.ok(rerun.start(got.replay))
+  assert.equal(rerun.watched(), null)
   await app.dispose()
 })

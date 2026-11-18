@@ -87,6 +87,8 @@ export interface Online {
   /** Up to `count` runs of this track's board from rank `from` on, for reading all of it; null when it cannot be had. */
   page(from: number, count: number): Promise<BoardPage | null>
   choose(choice: GhostChoice): void
+  /** A run's replay, to watch it; null when it cannot be had. */
+  replay(runId: string): Promise<RunReplay | null>
   /** How many ghosts to race (`fieldSizes`). */
   setField(count: number): void
   /** Whether a name could be taken now (it is not saved). */
@@ -528,6 +530,14 @@ export const createOnline = (options: OnlineOptions): Online => {
       reached(got)
       if (Result.isSuccess(got)) return got.success
       return got.failure._tag === "NotFound" ? { track, rules, total: 0, from, entries: [] } : null
+    },
+    async replay(runId) {
+      if (!enabled) return null
+      if (rivalRun !== null && rivalRun.runId === runId) return rivalRun
+      const got = await run(ask(timeoutMs, (lb) => lb.replay(runId)))
+      if (got === undefined) return null
+      reached(got)
+      return Result.isSuccess(got) ? got.success : null
     },
     setField(count) {
       field = fieldSizes.includes(count as 1) ? count : 1

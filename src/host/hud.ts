@@ -18,7 +18,9 @@
  *   on screen explains it.
  * - bottom centre: short messages ("off the road", a changed setting) and the result when a
  *   lap is done, with the board's answer when it was sent.
- * - top centre: `REPLAY`, while the lap just driven is shown again.
+ * - top centre: `REPLAY`, while the lap just driven is shown again; `WATCHING` with the place,
+ *   the driver, the time and the key that ends it while a run of the board is watched.
+ *   Watching hides the result of the player's own lap and how to start.
  * - the middle of the map: how to start, only when the car has waited on the line for a
  *   few seconds with nothing pressed. The controls are not otherwise explained.
  *
@@ -34,6 +36,7 @@ import type { Stage } from "./contract.ts"
 import type { LapGhost } from "./ghost.ts"
 import type { FinishResult } from "./laps.ts"
 import type { PostState } from "./online.ts"
+import type { WatchedRun } from "./rerun.ts"
 import { createBrandPlate } from "./brand/plate.ts"
 import { palette } from "./palette.ts"
 
@@ -60,8 +63,8 @@ export interface HudState {
   readonly pad: "none" | "keyboard" | "gamepad" | "buttons-only"
   /** The car on screen: the player's, or the replay's while the lap is shown again. */
   readonly car: CarView
-  /** The lap just driven is being shown again. */
-  readonly replay: boolean
+  /** What is shown again instead of the race: the lap just driven, a run of the board, or nothing. */
+  readonly replay: { readonly kind: "lap" } | { readonly kind: "run"; readonly run: WatchedRun } | null
 }
 
 export interface Hud {
@@ -328,10 +331,11 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
   let resultWon: (typeof medalNames)[number] | null = null
   let resultMedalKey = ""
 
-  // ── top centre: the lap is being shown again ───────────────────────────
-  // The panel is as wide as its dot and its word, with the same space at both ends.
+  // ── top centre: a lap is being shown again ─────────────────────────────
+  // The panel is as wide as its dot and its words, with the same space at both ends.
   const replayH = 34
   const replayPad = 15
+  const replayGap = 10
   const replayTag = new Container()
   const replayBg = new Graphics()
   replayTag.addChild(replayBg)
@@ -340,11 +344,36 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
   replayTag.addChild(replayDot)
   const replayText = text(replayTag, "REPLAY", label(13, palette.hudText))
   replayText.anchor.set(0, 0.5)
-  const replayW = Math.ceil(replayPad + 10 + 9 + replayText.width + replayPad)
-  drawPanel(replayBg, replayW, replayH)
-  replayBg.position.set(-replayW / 2, 0)
-  replayDot.position.set(-replayW / 2 + replayPad + 5, replayH / 2)
-  replayText.position.set(-replayW / 2 + replayPad + 10 + 9, replayH / 2)
+  // A watched run's place, driver and time, after the word.
+  const replayRank = text(replayTag, "", number(13, palette.hudAccent))
+  const replayName = text(replayTag, "", label(13, palette.hudText))
+  const replayTime = text(replayTag, "", number(13, palette.hudDim))
+  const replayHint = text(replayTag, "", label(11, palette.hudDim))
+  const watchParts = [replayRank, replayName, replayTime, replayHint]
+  for (const part of watchParts) part.anchor.set(0, 0.5)
+  let replayKey = ""
+  const drawReplayTag = (watched: WatchedRun | null, onPad: boolean): void => {
+    const key = watched === null ? "lap" : `${watched.runId}:${watched.rank}:${onPad}`
+    if (key === replayKey) return
+    replayKey = key
+    replayText.text = watched === null ? "REPLAY" : "WATCHING"
+    replayRank.text = watched === null ? "" : `P${watched.rank}`
+    replayName.text = watched === null ? "" : watched.mine ? "YOUR BEST" : watched.name.toUpperCase()
+    replayTime.text = watched === null ? "" : formatTime(watched.timeMs)
+    replayHint.text = watched === null ? "" : `${onPad ? "Y" : "R"} TO DRIVE`
+    const parts = [replayText, ...(watched === null ? [] : watchParts)]
+    const width = Math.ceil(replayPad + 10 + 9 + parts.reduce((sum, part) => sum + part.width, 0) + replayGap * (parts.length - 1) + replayPad)
+    drawPanel(replayBg, width, replayH)
+    replayBg.position.set(-width / 2, 0)
+    replayDot.position.set(-width / 2 + replayPad + 5, replayH / 2)
+    let x = -width / 2 + replayPad + 10 + 9
+    for (const part of parts) {
+      part.position.set(x, replayH / 2)
+      x += part.width + replayGap
+    }
+    for (const part of watchParts) part.visible = watched !== null
+  }
+  drawReplayTag(null, false)
   replayTag.visible = false
   root.addChild(replayTag)
 
@@ -669,7 +698,8 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
       drawMedals()
 
       // How to start, once the car has waited on the line long enough to show the player is lost.
-      waited = lap.phase === "ready" ? waited + seconds : 0
+      // Not over a run being watched: the player is looking, not lost.
+      waited = lap.phase === "ready" && state.replay?.kind !== "run" ? waited + seconds : 0
       const prompting = waited >= promptAfter
       prompt.alpha += ((prompting ? 1 : 0) - prompt.alpha) * Math.min(1, seconds * (prompting ? 6 : 14))
       prompt.visible = prompt.alpha > 0.02
@@ -706,16 +736,21 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
         else if (sliding) driftBar.roundRect(0, 0, Math.max(5, barW * (charge ?? 0)), 5, 2.5).fill({ color: (charge ?? 0) >= 1 ? palette.driftFull : palette.driftCharge })
       }
 
-      // While the lap is shown again the timing panel is away, its plate with it.
-      tower.visible = !state.replay
-      plate.show(!state.replay)
+      // While a lap is shown again the timing panel is away, its plate with it.
+      const replaying = state.replay !== null
+      tower.visible = !replaying
+      plate.show(!replaying)
 
       // The replay's mark, its dot blinking like a recorder's.
-      replayTag.visible = state.replay
-      if (state.replay) replayDot.alpha = now % 1.2 < 0.75 ? 1 : 0.25
+      replayTag.visible = replaying
+      if (state.replay !== null) {
+        drawReplayTag(state.replay.kind === "run" ? state.replay.run : null, state.pad === "gamepad")
+        replayDot.alpha = now % 1.2 < 0.75 ? 1 : 0.25
+      }
 
-      // The result stays while the lap is finished, or a few seconds when the clock runs on.
-      const showingResult = resultAttempt === lap.attempt && (lap.phase === "finished" || now < finishShownUntil)
+      // The result stays while the lap is finished, or a few seconds when the clock runs on;
+      // not over someone else's lap being watched.
+      const showingResult = state.replay?.kind !== "run" && resultAttempt === lap.attempt && (lap.phase === "finished" || now < finishShownUntil)
       result.visible = showingResult
       if (showingResult) {
         drawResultMedal(state.pad === "gamepad")

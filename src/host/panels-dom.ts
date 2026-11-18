@@ -70,18 +70,23 @@ export const markRow = (row: HTMLElement, marks: RaceMarks): void => {
 }
 
 /**
- * One run as a bar: its place, its driver, its time, and how far it is behind the fastest
- * (`leaderMs`). A click races it (`choose`).
+ * One run as a bar: its place, its driver, its time, how far it is behind the fastest
+ * (`leaderMs`), and a button to watch it. A click on the bar races it (`choose`); on the
+ * button, watches it without racing (`watch`).
  */
-export const drawRow = (entry: Entry, marks: RaceMarks, leaderMs: number, choose: (choice: GhostChoice) => void): HTMLElement => {
+export const drawRow = (entry: Entry, marks: RaceMarks, leaderMs: number, choose: (choice: GhostChoice) => void, watch: (entry: Entry) => void): HTMLElement => {
   const row = el("div", "tgp-row")
+  const watchButton = button("tgp-watch", "▶", () => watch(entry))
+  watchButton.title = entry.mine ? "Watch your best" : `Watch ${entry.name}`
+  watchButton.setAttribute("aria-label", watchButton.title)
   if (entry.mine) row.classList.add("tgp-mine")
   row.append(
     el("span", "tgp-rank tgp-mono", String(entry.rank)),
     el("span", "tgp-name", entry.name.toUpperCase()),
     el("span", "tgp-time tgp-mono", formatTime(entry.timeMs)),
     el("span", "tgp-behind tgp-mono", entry.timeMs > leaderMs ? `+${((entry.timeMs - leaderMs) / 1000).toFixed(3)}` : ""),
-    el("span", "tgp-dot")
+    el("span", "tgp-dot"),
+    watchButton
   )
   row.dataset["key"] = entry.mine ? "me" : `player:${entry.name}`
   row.dataset["run"] = entry.runId

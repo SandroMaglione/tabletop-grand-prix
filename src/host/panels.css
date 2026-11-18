@@ -6,8 +6,8 @@
   position: fixed;
   top: 12px;
   right: 12px;
-  /* Wide enough for the longest name (16 letters) beside a time and a gap. */
-  width: 376px;
+  /* Wide enough for the longest name (16 letters) beside a time, a gap and the watch button. */
+  width: 400px;
   transform-origin: top right;
   display: flex;
   flex-direction: column;
@@ -86,7 +86,7 @@
 /* The board as a table: column names, then each run as its own bar. The player's bar is lit. */
 .tgp-cols, .tgp-row {
   display: grid;
-  grid-template-columns: 30px 1fr 68px 58px 10px;
+  grid-template-columns: 30px 1fr 68px 58px 10px 20px;
   align-items: center;
   column-gap: 8px;
 }
@@ -135,6 +135,22 @@
 .tgp-row.tgp-mine .tgp-behind { color: var(--hud-back); opacity: 0.6; }
 .tgp-row .tgp-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
 .tgp-row.tgp-raced .tgp-dot { background: var(--ghost); }
+/* Watch the run without racing it: dim until the row is pointed at. */
+.tgp-watch {
+  width: 20px;
+  height: 20px;
+  padding: 0 0 0 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.4;
+  font-size: 9px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.tgp-row:hover .tgp-watch { opacity: 0.8; }
+.tgp-row .tgp-watch:hover { opacity: 1; background: var(--hud-accent); color: var(--hud-back); }
 .tgp-gap { height: 8px; display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 10px; letter-spacing: 3px; }
 .tgp-empty { padding: 14px 10px; font-size: 12px; color: var(--hud-dim); text-align: center; }
 
