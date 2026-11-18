@@ -56,6 +56,7 @@ import { createPanels } from "./panels.ts"
 import { Profile, layer as profileLayer } from "./profile.ts"
 import { createReplayLook } from "./replay-look.ts"
 import { createRerun, type Rerun, type WatchedRun } from "./rerun.ts"
+import { createSplits } from "./splits.ts"
 import { Settings, layer as settingsLayer } from "./settings.ts"
 import { createStage } from "./stage.ts"
 import { storageLayer, takeLegacySettings } from "./storage.ts"
@@ -189,7 +190,8 @@ const panels = createPanels({
   shown: loaded?.settings.board ?? true,
   keep: (board) => void run(Settings.use((settings) => settings.change({ board }))),
   keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 }))),
-  watch: (entry) => watchRun(entry)
+  watch: (entry) => watchRun(entry),
+  splits: createSplits(online, Math.max(1, track.checkpoints.length))
 })
 /** The wipe covers the window: cut to the lap just driven, and open the board beside it. */
 const showLapAgain = (): void => {

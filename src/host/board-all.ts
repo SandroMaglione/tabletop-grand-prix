@@ -2,7 +2,7 @@
  * The whole board, in the middle of the window: opened from the corner board's SHOW ALL, it
  * lands on the player's own run (the top when they have none) and reads more of the board,
  * a page at a time, as the list is scrolled toward either end. A click on a run races it, and
- * its ▶ watches it (closing the list), as on the corner board.
+ * its ▶ watches it (closing the list) and its ▾ drops its splits down, as on the corner board.
  *
  * It is modal: while it is open the car is left alone (`open()` is read by the page), and the
  * arrows, Page Up/Down, Home and End scroll the list. The cross, `Esc`, `L` and a click
@@ -10,7 +10,7 @@
  */
 import type { BoardPage, Entry } from "../api/contract.ts"
 import type { Online } from "./online.ts"
-import { button, drawRow, el, markRow, raceMarks, setHudColours } from "./panels-dom.ts"
+import { button, drawEntry, el, markRow, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
 
 /** Runs read at a time. */
 const PAGE = 100
@@ -27,7 +27,7 @@ export interface AllBoard {
   hide(): void
 }
 
-export const createAllBoard = (online: Online, watch: (entry: Entry) => void): AllBoard => {
+export const createAllBoard = (online: Online, actions: RowActions): AllBoard => {
   const root = el("div", "tgp-all")
   setHudColours(root)
   root.hidden = true
@@ -36,7 +36,7 @@ export const createAllBoard = (online: Online, watch: (entry: Entry) => void): A
   const count = el("span", "tgp-count")
   head.append(el("span", "tgp-title", "LEADERBOARD"), count, button("tgp-x", "×", () => hide()))
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"))
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"), el("span"))
   const list = el("div", "tgp-rows tgp-all-rows")
   const topLine = el("div", "tgp-all-more")
   const bottomLine = el("div", "tgp-all-more")
@@ -77,12 +77,13 @@ export const createAllBoard = (online: Online, watch: (entry: Entry) => void): A
   const rowsOf = (entries: ReadonlyArray<Entry>): DocumentFragment => {
     const fragment = document.createDocumentFragment()
     const now = marks()
-    for (const entry of entries) {
+    entries.forEach((entry, i) => {
       // The board may have moved between two reads: a run already drawn is not drawn twice.
-      if (shown.has(entry.runId)) continue
+      if (shown.has(entry.runId)) return
       shown.add(entry.runId)
-      fragment.appendChild(drawRow(entry, now, leaderMs, (choice) => online.choose(choice), watch))
-    }
+      const before = entries[i - 1]
+      fragment.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, now, leaderMs, actions))
+    })
     return fragment
   }
 
@@ -138,10 +139,13 @@ export const createAllBoard = (online: Online, watch: (entry: Entry) => void): A
   }
   list.addEventListener("scroll", fill, { passive: true })
 
+  /** The row of the run at `rank`, when drawn (open splits sit between rows). */
+  const rowAt = (rank: number): HTMLElement | null => rows.querySelector<HTMLElement>(`.tgp-row[data-rank="${rank}"]`)
+
   /** Starts the list over at `rank` (the top for none), with that run in the middle. */
   const jump = async (rank: number | null): Promise<void> => {
     // Already drawn: scroll to it.
-    const drawn = rank === null || rank < first || rank > last ? null : rows.children[rank - first]
+    const drawn = rank === null || rank < first || rank > last ? null : rowAt(rank)
     if (drawn instanceof HTMLElement) {
       list.scrollTop = drawn.offsetTop - list.clientHeight / 2 + drawn.offsetHeight / 2
       return
@@ -170,7 +174,7 @@ export const createAllBoard = (online: Online, watch: (entry: Entry) => void): A
     last = from - 1 + page.entries.length
     rows.appendChild(page.entries.length === 0 ? el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST") : rowsOf(page.entries))
     drawEnds()
-    const target = rank === null ? null : rows.children[rank - first]
+    const target = rank === null ? null : rowAt(rank)
     list.scrollTop = target instanceof HTMLElement ? target.offsetTop - list.clientHeight / 2 + target.offsetHeight / 2 : 0
     fill()
   }
@@ -212,7 +216,7 @@ export const createAllBoard = (online: Online, watch: (entry: Entry) => void): A
   online.subscribe(() => {
     if (root.hidden) return
     const now = marks()
-    for (const row of rows.children) if (row instanceof HTMLElement) markRow(row, now)
+    for (const row of rows.querySelectorAll<HTMLElement>(".tgp-row")) markRow(row, now)
     drawEnds()
   })
 
