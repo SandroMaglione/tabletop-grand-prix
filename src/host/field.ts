@@ -40,8 +40,11 @@ export interface FieldGhost {
 export interface Field {
   /** Race these runs, in this order (it sets their tints), from the next lap on. */
   set(runs: ReadonlyArray<FieldRun>): void
-  /** Once per drawn frame, with the view drawn and whether a lap of the player's runs. */
-  update(view: RaceView, racing: boolean): void
+  /**
+   * Once per drawn frame, with the view drawn and whether a lap of the player's runs. With
+   * `drawn` false (a run of the board is watched) no ghost is drawn.
+   */
+  update(view: RaceView, racing: boolean, drawn?: boolean): void
   /** The ghosts drawn this frame. */
   ghosts(): ReadonlyArray<FieldGhost>
   /** Laps ready to race, of those asked for. */
@@ -136,7 +139,7 @@ export const createField = (parent: Container3D, options: { readonly crowd?: { r
         waiting = null
       }
     },
-    update(view, isRacing) {
+    update(view, isRacing, drawn = true) {
       running = isRacing
       if (!running) {
         if (waiting !== null) {
@@ -149,7 +152,7 @@ export const createField = (parent: Container3D, options: { readonly crowd?: { r
       shown = []
       for (let i = 0; i < Math.max(racing.length, slots.length); i++) {
         const run = racing[i]
-        const lap = run === undefined || !joined.has(run.key) || i >= amount * racing.length ? undefined : laps.get(run.key)
+        const lap = !drawn || run === undefined || !joined.has(run.key) || i >= amount * racing.length ? undefined : laps.get(run.key)
         const pose = run === undefined || lap === undefined ? null : poseAt(lap.poses, timeMs)
         if (run === undefined || lap === undefined || pose === null) {
           const idle = slots[i]

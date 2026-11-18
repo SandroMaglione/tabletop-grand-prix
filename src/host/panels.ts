@@ -4,7 +4,7 @@
  * drawn to match the HUD: small dark panels, white text, the yellow accent.
  *
  * - the board: the Typeonce plate as its first row (a link to typeonce.games), then the top
- *   runs, the player's own with its neighbours, the total, which ghost to race (next closest,
+ *   runs (a click races one, its ▶ watches it without racing), the player's own with its neighbours, the total, which ghost to race (next closest,
  *   their best, none, or any row clicked), the player's name with "change", and the tracks
  *   when there is more than one.
  *   Under the rows, SHOW ALL opens the whole board in the middle of the window (`board-all.ts`).
@@ -26,7 +26,7 @@
  * `L` and `Esc` do nothing while a text field has focus, and ritmo's keyboard already
  * ignores keys typed into one, so typing a name never drives the car.
  */
-import type { Board } from "../api/contract.ts"
+import type { Board, Entry } from "../api/contract.ts"
 import { nameMaxLength } from "../api/names.ts"
 import { createAllBoard } from "./board-all.ts"
 import { createPlateLink, wipeLeavesMs } from "./brand/plate.ts"
@@ -52,6 +52,8 @@ export interface Panels {
   lapShown(): void
   /** The attempt started again: the car is on the line, and the board is back. */
   lapReset(): void
+  /** A run of the board is being watched: the board folds to its small panel until the next start. */
+  watchStarted(): void
 }
 
 export interface PanelsOptions {
@@ -66,6 +68,8 @@ export interface PanelsOptions {
   readonly keep: (shown: boolean) => void
   /** The player picked how many ghosts to race: kept. */
   readonly keepField: (count: number) => void
+  /** The player asked to watch a run of the board, without racing it. */
+  readonly watch: (entry: Entry) => void
 }
 
 const sameChoice = (a: GhostChoice, b: GhostChoice): boolean => a.kind === b.kind && (a.kind !== "run" || (b.kind === "run" && a.runId === b.runId))
@@ -75,7 +79,12 @@ export const createPanels = (options: PanelsOptions): Panels => {
   const root = el("div", "tgp-panels")
   setHudColours(root)
   document.body.appendChild(root)
-  const all = createAllBoard(online)
+  // Watching from the whole board closes it, so the run is in sight.
+  const watch = (entry: Entry): void => {
+    all.hide()
+    options.watch(entry)
+  }
+  const all = createAllBoard(online, (entry) => watch(entry))
 
   /** The player keeps the board up. */
   let wanted = options.shown
@@ -116,7 +125,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   boardHead.append(boardTitle, boardCount, button("tgp-x", "×", () => want(false)))
   const trackLine = el("div", "tgp-line")
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"))
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"))
   const rows = el("div", "tgp-rows")
   const showAll = button("tgp-all-open", "SHOW ALL", () => all.show())
   const ghostLine = el("div", "tgp-line")
@@ -228,13 +237,13 @@ export const createPanels = (options: PanelsOptions): Panels => {
       rows.appendChild(el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST"))
     } else {
       const leaderMs = board.top[0]?.timeMs ?? 0
-      for (const entry of board.top) rows.appendChild(drawRow(entry, marks, leaderMs, choose))
+      for (const entry of board.top) rows.appendChild(drawRow(entry, marks, leaderMs, choose, watch))
       const around = board.around.filter((entry) => !board.top.some((top) => top.runId === entry.runId))
       if (around.length > 0) {
         const last = board.top[board.top.length - 1]
         const first = around[0]
         if (last !== undefined && first !== undefined && first.rank > last.rank + 1) rows.appendChild(el("div", "tgp-gap", "···"))
-        for (const entry of around) rows.appendChild(drawRow(entry, marks, leaderMs, choose))
+        for (const entry of around) rows.appendChild(drawRow(entry, marks, leaderMs, choose, watch))
       }
     }
     for (const { chip, choice } of ghostChips) chip.setAttribute("aria-pressed", String(sameChoice(choice, state.choice)))
@@ -452,6 +461,11 @@ export const createPanels = (options: PanelsOptions): Panels => {
       held = null
       apply()
       if (boardUp()) drawBoard()
+    },
+    watchStarted() {
+      all.hide()
+      away = true
+      apply()
     }
   }
 }
