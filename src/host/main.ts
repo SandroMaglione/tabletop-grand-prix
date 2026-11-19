@@ -46,7 +46,7 @@ import type { Stage } from "./contract.ts"
 import { createField, type Field } from "./field.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
 import { palette } from "./palette.ts"
-import { createPassTags } from "./tags.ts"
+import { createPassMarks } from "./passes.ts"
 import { createMadeWith } from "./brand/made-with.ts"
 import { createHud, hudFont, hudLabelFont, panelAlpha } from "./hud.ts"
 import { createInput } from "./input.ts"
@@ -164,7 +164,7 @@ const ghost = createGhost()
 const rankPreview = import.meta.env.DEV && params.has("rank") ? Number(params.get("rank")) || null : null
 const crowdCount = import.meta.env.DEV && params.has("ghosts") ? Math.max(0, Math.min(1000, Number(params.get("ghosts") || 100) || 0)) : 0
 const field = createField(stage.world, crowdCount > 0 ? { crowd: { track: entry.id, count: crowdCount } } : {})
-const passTags = createPassTags(stage, track)
+const passMarks = createPassMarks(stage, track)
 const online = createOnline({
   enabled: leaderboard !== null,
   run,
@@ -388,10 +388,12 @@ const loop = FixedLoop.start({
     field.update(shown, view.lap.phase === "running", watched === null)
     // The lap the ghost drives now: a ghost by sector is its sector's driver.
     const raced = watched === null ? ghost.leg(shown) : null
-    // Passing your own best gets no tag: it would only say your name, right over your car (the
-    // ghost drives your line), and the delta already tells you are ahead.
-    const racedTag = raced === null || raced.kind === "own" ? "" : raced.name
-    passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: racedTag, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
+    // Passing your own best is not marked: it drives your line, so the ring would be right
+    // under your car, and the delta already tells you are ahead. A ghost by sector is passed
+    // once in each sector, each its own driver.
+    const racedKey = ghost.current()?.kind === "sectors" ? `raced:${shown.lap.splitsMs.length}` : "raced"
+    const racedMark = { key: racedKey, marked: raced !== null && raced.kind !== "own", color: palette.ghost, pose: ghostPose }
+    passMarks.update(shown, raced === null ? field.ghosts() : [racedMark, ...field.ghosts()], seconds)
     hud.update(view, { pad: padLabel, car: shown.car, replay: watched !== null ? { kind: "run", run: watched } : replaying ? { kind: "lap" } : null }, seconds)
     panels.update(view.lap.phase === "running")
     signup.update(replaying && watched === null)
