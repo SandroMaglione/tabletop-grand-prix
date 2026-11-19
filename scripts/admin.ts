@@ -9,6 +9,7 @@
  *   pnpm admin <stage> rename <playerId> <name>  gives a player another name (a kept-back one is allowed)
  *   pnpm admin <stage> remove-run <runId>        takes one run off its board
  *   pnpm admin <stage> ban <playerId>            the identity stops working, its runs go, the name stays taken
+ *   pnpm admin <stage> fill-sectors              files the sectors of runs sent before the server kept them (once, after deploying them)
  *
  * `<stage>` is `dev`, `staging` or `prod`. See docs/server.md.
  */
@@ -19,7 +20,7 @@ import { rulesVersion, tracks } from "../src/sim/index.ts"
 
 const [stage, command, ...rest] = process.argv.slice(2)
 const usage = (): never => {
-  console.error("usage: pnpm admin <dev|staging|prod> <players [search] | board [track] [limit] | rename <playerId> <name> | remove-run <runId> | ban <playerId>>")
+  console.error("usage: pnpm admin <dev|staging|prod> <players [search] | board [track] [limit] | rename <playerId> <name> | remove-run <runId> | ban <playerId> | fill-sectors>")
   process.exit(2)
 }
 if (stage === undefined || command === undefined || !["dev", "staging", "prod"].includes(stage)) usage()
@@ -80,6 +81,19 @@ switch (command) {
   case "ban": {
     if (rest[0] === undefined) usage()
     console.log(await run(admin.admin.ban({ headers, params: { playerId: rest[0] ?? "" } })))
+    break
+  }
+  case "fill-sectors": {
+    // A few runs a request, until none waits (or a pass files nothing new).
+    let filled = 0
+    let failed = 0
+    for (;;) {
+      const pass = await run(admin.admin.fillSectors({ headers, query: { limit: 20 } }))
+      filled += pass.filled
+      failed += pass.failed
+      console.log(`filled ${filled}, could not drive ${failed}, ${pass.left} left`)
+      if (pass.left === 0 || pass.filled + pass.failed === 0) break
+    }
     break
   }
   default:

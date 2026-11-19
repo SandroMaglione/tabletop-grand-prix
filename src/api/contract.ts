@@ -35,9 +35,21 @@ export const Entry = Schema.Struct({
   timeMs: count,
   steering: Steering,
   /** This is the asking player's own run. */
-  mine: Schema.Boolean
+  mine: Schema.Boolean,
+  /**
+   * Each sector's time, whole milliseconds adding up to `timeMs`. Left out for a run the
+   * server has not driven for its sectors yet (filed before it kept them).
+   */
+  sectorsMs: Schema.optionalKey(Schema.Array(count))
 })
 export type Entry = typeof Entry.Type
+
+/**
+ * How a board is ordered: by the whole lap (null), or by one sector's time (0 is the first).
+ * Ordered by a sector, a board ranks the runs by that sector alone and holds only the runs
+ * whose sectors the server knows; `rank`, `total` and `me` are of that order.
+ */
+export type BoardOrder = number | null
 
 export const Board = Schema.Struct({
   track: Schema.String,
@@ -126,10 +138,10 @@ export interface LeaderboardShape {
   readonly rename: (identity: Identity, name: string) => Effect.Effect<Identity, NameRefused | NameTaken | Unauthorised | RateLimited | Unavailable>
   /** Sends a run. `replay` is the replay as text (`replayToText`). */
   readonly submit: (identity: Identity, replay: string) => Effect.Effect<Submitted, RunRefused | Unauthorised | RateLimited | Unavailable>
-  /** The board of a track under the server's rules, seen by `identity` (or by nobody). */
-  readonly board: (track: string, identity: Identity | null) => Effect.Effect<Board, NotFound | Unavailable>
-  /** Up to `count` runs of a board (capped at `pageMax`) from rank `from` on (1 is the fastest), seen by `identity` (or by nobody). */
-  readonly page: (track: string, from: number, count: number, identity: Identity | null) => Effect.Effect<BoardPage, NotFound | Unavailable>
+  /** The board of a track under the server's rules in `order`, seen by `identity` (or by nobody). `NotFound` for a sector the track has not. */
+  readonly board: (track: string, identity: Identity | null, order: BoardOrder) => Effect.Effect<Board, NotFound | Unavailable>
+  /** Up to `count` runs of a board in `order` (capped at `pageMax`) from rank `from` on (1 is the fastest), seen by `identity` (or by nobody). */
+  readonly page: (track: string, from: number, count: number, identity: Identity | null, order: BoardOrder) => Effect.Effect<BoardPage, NotFound | Unavailable>
   /**
    * The run to chase: the slowest one that is still faster than `fasterThanMs`, never the
    * asking player's own. With `fasterThanMs` null (no lap yet), the slowest run on the

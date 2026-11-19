@@ -44,7 +44,7 @@ test("a first visit has the default settings, no name and nothing per board", as
       }
     })
   )
-  assert.deepEqual(seen.settings, { version: 5, muted: false, track: "", board: true, ghosts: 1, signup: true })
+  assert.deepEqual(seen.settings, { version: 6, muted: false, track: "", board: true, signup: true })
   assert.equal(seen.fresh, true)
   assert.deepEqual(seen.profile, { version: 1, identity: null, asked: false })
   assert.equal(seen.best, null)
@@ -55,7 +55,7 @@ test("a first visit has the default settings, no name and nothing per board", as
 test("settings, the name, the best lap and the rival come back on the next visit, filed by track and rules", async () => {
   const store = await makeStore()
   const identity = { id: "p-1", name: "Lap Hound", secret: "s-1" }
-  const rival = { version: 1, choice: { kind: "run", runId: "r-9" }, run: { runId: "r-9", name: "Wren", timeMs: 29572, steering: "car", replay: "VEdQ" } } as const
+  const rival = { version: 2, choice: { kind: "sectors", runs: [null, "r-9", null] }, order: 1, picked: ["r-3", "r-9"], run: { runId: "r-9", name: "Wren", timeMs: 29572, steering: "car", replay: "VEdQ" } } as const
   await visit(
     store,
     Effect.gen(function*() {
@@ -99,24 +99,15 @@ test("an unreadable save is kept aside and reads as nothing", async () => {
     })
   )
   assert.equal(seen.best, null)
-  assert.equal(seen.settings.version, 5)
+  assert.equal(seen.settings.version, 6)
   assert.equal(await Effect.runPromise(store.get(`${key}.unreadable`)), "{ not json")
   assert.equal(await Effect.runPromise(store.get(`${storagePrefix}settings.unreadable`)), JSON.stringify({ version: 9 }))
 })
 
-test("settings saved before the ghost count keep the board choice and race one ghost", async () => {
+test("settings saved before the ghost count keep the board choice", async () => {
   const store = await makeStore({ [`${storagePrefix}settings`]: JSON.stringify({ version: 3, muted: true, track: "elsewhere", board: false }) })
-  const seen = await visit(
-    store,
-    Effect.gen(function*() {
-      const settings = yield* Settings
-      const before = yield* settings.saved
-      const after = yield* settings.change({ ghosts: 10 })
-      return { before, after }
-    })
-  )
-  assert.deepEqual(seen.before, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 1, signup: true })
-  assert.equal(seen.after.ghosts, 10)
+  const seen = await visit(store, Settings.use((settings) => settings.saved))
+  assert.deepEqual(seen, { version: 6, muted: true, track: "elsewhere", board: false, signup: true })
 })
 
 test("settings saved before the email sign-up keep everything and may still offer it; once declined it stays declined", async () => {
@@ -130,11 +121,25 @@ test("settings saved before the email sign-up keep everything and may still offe
       return before
     })
   )
-  assert.deepEqual(seen, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 5, signup: true })
+  assert.deepEqual(seen, { version: 6, muted: true, track: "elsewhere", board: false, signup: true })
   const again = await visit(store, Settings.use((settings) => settings.saved))
-  assert.deepEqual(again, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 5, signup: false })
+  assert.deepEqual(again, { version: 6, muted: true, track: "elsewhere", board: false, signup: false })
   const raw = await Effect.runPromise(store.get(`${storagePrefix}settings`))
-  assert.ok(raw !== undefined && JSON.parse(raw).version === 5)
+  assert.ok(raw !== undefined && JSON.parse(raw).version === 6)
+})
+
+test("settings saved with a ghost count keep the rest: the ghosts are added from the board now", async () => {
+  const store = await makeStore({ [`${storagePrefix}settings`]: JSON.stringify({ version: 5, muted: false, track: "", board: true, ghosts: 10, signup: false }) })
+  assert.deepEqual(await visit(store, Settings.use((settings) => settings.saved)), { version: 6, muted: false, track: "", board: true, signup: false })
+})
+
+test("a rival saved before the board could be shown by sector: a run chosen to race races beside the next closest", async () => {
+  const run = { runId: "r-9", name: "Wren", timeMs: 29572, steering: "car", replay: "VEdQ" } as const
+  const key = `${storagePrefix}${boardKey("rival", "spindle-leap", 1)}`
+  const chosen = await makeStore({ [key]: JSON.stringify({ version: 1, choice: { kind: "run", runId: "r-9" }, run }) })
+  assert.deepEqual(await visit(chosen, Rivals.use((rivals) => rivals.get("spindle-leap", 1))), { version: 2, choice: { kind: "next" }, order: null, picked: ["r-9"], run })
+  const own = await makeStore({ [key]: JSON.stringify({ version: 1, choice: { kind: "own" }, run: null }) })
+  assert.deepEqual(await visit(own, Rivals.use((rivals) => rivals.get("spindle-leap", 1))), { version: 2, choice: { kind: "own" }, order: null, picked: [], run: null })
 })
 
 test("the outbox keeps only the fastest run waiting, and forgets it once sent", async () => {

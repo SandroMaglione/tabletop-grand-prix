@@ -33,7 +33,7 @@
 import { Container, Graphics, Text, type TextStyleOptions } from "pixi.js"
 import type { CarView, RaceEvent, RaceView, TrackData } from "../sim/index.ts"
 import type { Stage } from "./contract.ts"
-import type { LapGhost } from "./ghost.ts"
+import type { RaceGhost } from "./ghost.ts"
 import type { FinishResult } from "./laps.ts"
 import type { PostState } from "./online.ts"
 import type { WatchedRun } from "./rerun.ts"
@@ -45,7 +45,7 @@ export interface HudSource {
   /** The device's best lap. */
   best(): { readonly timeMs: number; readonly splitsMs: ReadonlyArray<number> } | null
   /** The ghost being raced. */
-  ghost(): LapGhost | null
+  ghost(): RaceGhost | null
   ghostLoading(): boolean
   lastFinish(): FinishResult | null
   /** The player's place on the board, when known. */
@@ -353,10 +353,10 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
   for (const part of watchParts) part.anchor.set(0, 0.5)
   let replayKey = ""
   const drawReplayTag = (watched: WatchedRun | null, onPad: boolean): void => {
-    const key = watched === null ? "lap" : `${watched.runId}:${watched.rank}:${onPad}`
+    const key = watched === null ? "lap" : `${watched.runId}:${watched.rank}:${watched.sector}:${onPad}`
     if (key === replayKey) return
     replayKey = key
-    replayText.text = watched === null ? "REPLAY" : "WATCHING"
+    replayText.text = watched === null ? "REPLAY" : watched.sector === null ? "WATCHING" : `WATCHING S${watched.sector + 1}`
     replayRank.text = watched === null ? "" : `P${watched.rank}`
     replayName.text = watched === null ? "" : watched.mine ? "YOUR BEST" : watched.name.toUpperCase()
     replayTime.text = watched === null ? "" : formatTime(watched.timeMs)
@@ -687,8 +687,9 @@ export const createHud = (stage: Stage, track: TrackData, source: HudSource, cov
         else ghostDot.circle(0, 0, 4.5).stroke({ color: palette.ghost, alpha: 0.8, width: 1.4 })
         const name = lapGhost === null ? "NO GHOST" : lapGhost.kind === "own" ? "YOUR BEST" : lapGhost.name.toUpperCase()
         ghostRow.name.text = name
-        ghostRow.name.style.fill = lapGhost?.kind === "rival" ? palette.hudText : palette.hudDim
-        ghostRow.value.text = loading ? "…" : lapGhost?.kind === "rival" ? formatTime(lapGhost.timeMs) : ""
+        // A ghost by sector shows its ideal lap: each driver's own sector, added up.
+        ghostRow.name.style.fill = lapGhost !== null && lapGhost.kind !== "own" ? palette.hudText : palette.hudDim
+        ghostRow.value.text = loading ? "…" : lapGhost !== null && lapGhost.kind !== "own" ? formatTime(lapGhost.timeMs) : ""
         ghostRow.value.style.fill = palette.hudText
       }
       // A finished lap whose splits leave out the last line still fills the last sector.

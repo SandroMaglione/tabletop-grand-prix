@@ -4,9 +4,14 @@
  * drawn to match the HUD: small dark panels, white text, the yellow accent.
  *
  * - the board: the Typeonce plate as its first row (a link to typeonce.games), then the top
- *   runs (a click races one, its ▶ watches it without racing), the player's own with its neighbours, the total, which ghost to race (next closest,
- *   their best, none, or any row clicked), the player's name with "change", and the tracks
- *   when there is more than one.
+ *   runs, the player's own with its neighbours, the total, which ghost to race (the next
+ *   closest, the fastest, one driver per sector, their best, or none), the player's name with
+ *   "change", and the tracks when there is more than one. A click on a row adds that run's
+ *   ghost beside the raced one, or takes it away; its ▶ watches it without racing.
+ *   BY orders the board by the lap or by one sector (each row then shows its time in that
+ *   sector, and ▶ shows that sector alone, again and again); FASTEST races the fastest in
+ *   the order shown. BY SECTOR races one driver per sector, the fastest in each unless the
+ *   player picks another: a sector's chip, then a row, picks its driver.
  *   Each row's ▾ drops its splits down under it: each sector's time and what it gains or
  *   loses on the run just above, the worst lit (`splits.ts`). Under the rows, SHOW ALL opens
  *   the whole board in the middle of the window (`board-all.ts`).
@@ -28,15 +33,15 @@
  * `L` and `Esc` do nothing while a text field has focus, and ritmo's keyboard already
  * ignores keys typed into one, so typing a name never drives the car.
  */
-import type { Board, Entry } from "../api/contract.ts"
+import type { Board, BoardOrder, Entry } from "../api/contract.ts"
 import { nameMaxLength } from "../api/names.ts"
 import { createAllBoard } from "./board-all.ts"
 import { createPlateLink, wipeLeavesMs } from "./brand/plate.ts"
 import type { GhostChoice } from "./boards.ts"
 import { makeHandle } from "./handles.ts"
 import { answerStatus, checking, type NameStatus, saving, shapeStatus } from "./name-messages.ts"
-import { fieldSizes, type Online } from "./online.ts"
-import { button, drawEntry, el, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
+import type { Online } from "./online.ts"
+import { button, drawEntry, el, orderChoices, orderHeading, orderTime, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
 import type { Splits } from "./splits.ts"
 import "./panels.css"
 
@@ -69,15 +74,14 @@ export interface PanelsOptions {
   readonly shown: boolean
   /** The player closed the board, or opened it again: keep that for the next visit. */
   readonly keep: (shown: boolean) => void
-  /** The player picked how many ghosts to race: kept. */
-  readonly keepField: (count: number) => void
-  /** The player asked to watch a run of the board, without racing it. */
-  readonly watch: (entry: Entry) => void
+  /** The player asked to watch a run of the board, without racing it: only sector `order` of it, unless null. */
+  readonly watch: (entry: Entry, order: BoardOrder) => void
   /** Each run's sectors against the run above it. */
   readonly splits: Splits
+  /** How many sectors the track's lap has: the board can be ordered by each. */
+  readonly sectors: number
 }
 
-const sameChoice = (a: GhostChoice, b: GhostChoice): boolean => a.kind === b.kind && (a.kind !== "run" || (b.kind === "run" && a.runId === b.runId))
 
 export const createPanels = (options: PanelsOptions): Panels => {
   const { online } = options
@@ -85,14 +89,28 @@ export const createPanels = (options: PanelsOptions): Panels => {
   setHudColours(root)
   document.body.appendChild(root)
   // Watching from the whole board closes it, so the run is in sight.
-  const watch = (entry: Entry): void => {
+  const watch = (entry: Entry, order: BoardOrder): void => {
     all.hide()
-    options.watch(entry)
+    options.watch(entry, order)
+  }
+  /** The sector whose driver the next click on a row picks (racing by sector), or null: a click adds or takes away a ghost. */
+  let armed: number | null = null
+  const arm = (sector: number | null): void => {
+    armed = sector
+    // Its board is the one to pick from.
+    if (sector !== null) online.setOrder(sector)
+    if (boardUp()) drawBoard()
+  }
+  const click = (entry: Entry): void => {
+    if (armed !== null) {
+      online.setLeg(armed, entry.runId)
+      arm(null)
+    } else online.toggle(entry.runId)
   }
   /** The runs whose splits are open, on this board and the whole one alike, for the visit. */
   const openSplits = new Set<string>()
-  const rowActions: RowActions = { choose: (choice) => online.choose(choice), watch: (entry) => watch(entry), splits: options.splits, open: openSplits }
-  const all = createAllBoard(online, rowActions)
+  const rowActions: RowActions = { click, watch, splits: options.splits, open: openSplits }
+  const all = createAllBoard(online, rowActions, options.sectors)
 
   /** The player keeps the board up. */
   let wanted = options.shown
@@ -101,8 +119,8 @@ export const createPanels = (options: PanelsOptions): Panels => {
   /** The name panel is open in the board's place. */
   let naming = false
   let running = false
-  /** The board as it stood before the lap, and when (`performance.now`) to let the new one in; -1 when nothing is held. */
-  let held: Board | null = null
+  /** The board as it stood before the lap (in its order), and when (`performance.now`) to let the new one in; -1 when nothing is held. */
+  let held: { readonly board: Board; readonly order: BoardOrder } | null = null
   let heldUntil = -1
   /** The player's place in the rows as last drawn, for the places a lap gained. */
   let drawnRank: number | null = null
@@ -132,32 +150,49 @@ export const createPanels = (options: PanelsOptions): Panels => {
   boardHead.classList.add("tgp-head-plain")
   boardHead.append(boardTitle, boardCount, button("tgp-x", "×", () => want(false)))
   const trackLine = el("div", "tgp-line")
+  const orderLine = el("div", "tgp-line")
+  orderLine.appendChild(el("span", "tgp-label", "BY"))
+  const orderChips = orderChoices(options.sectors).map(({ text, order }) => {
+    const chip = button("tgp-chip", text, () => online.setOrder(order))
+    chip.title = order === null ? "The board by lap time" : `The board by sector ${order + 1} alone`
+    orderLine.appendChild(chip)
+    return { chip, order }
+  })
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"), el("span"))
+  const timeHeading = el("span", "", "BEST")
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), timeHeading, el("span", "", "GAP"), el("span"), el("span"), el("span"))
   const rows = el("div", "tgp-rows")
   const showAll = button("tgp-all-open", "SHOW ALL", () => all.show())
   const ghostLine = el("div", "tgp-line")
   ghostLine.appendChild(el("span", "tgp-label", "GHOST"))
   const ghostChips = ([
-    ["NEXT CLOSEST", { kind: "next" }],
-    ["MY BEST", { kind: "own" }],
-    ["OFF", { kind: "none" }]
-  ] as const).map(([text, choice]) => {
-    const chip = button("tgp-chip", text, () => online.choose(choice))
-    ghostLine.appendChild(chip)
-    return { chip, choice: choice as GhostChoice }
-  })
-  // How many ghosts: the raced one, and the board's runs just ahead beside it.
-  const fieldLine = el("div", "tgp-line")
-  fieldLine.appendChild(el("span", "tgp-label", "GHOSTS"))
-  const fieldChips = fieldSizes.map((count) => {
-    const chip = button("tgp-chip", String(count), () => {
-      online.setField(count)
-      options.keepField(count)
+    ["NEXT", "next", "The next closest: the slowest run still faster than your best"],
+    ["FASTEST", "fastest", "The fastest run of the board, in the order it is shown"],
+    ["BY SECTOR", "sectors", "One driver per sector, the fastest in each unless you pick: at each line the ghost becomes the next sector's driver, from beside you"],
+    ["MY BEST", "own", "Your own best lap"],
+    ["OFF", "none", "No ghost (the ones you added still race)"]
+  ] as const).map(([text, kind, title]) => {
+    const chip = button("tgp-chip", text, () => {
+      if (kind === online.state().choice.kind) return
+      arm(null)
+      online.choose(kind === "sectors" ? { kind, runs: [] } : { kind })
     })
-    fieldLine.appendChild(chip)
-    return { chip, count }
+    chip.title = title
+    ghostLine.appendChild(chip)
+    return { chip, kind }
   })
+  // Racing by sector: each sector's driver, as a chip that, clicked, waits for a row to pick another.
+  const legLine = el("div", "tgp-line tgp-legs")
+  const legChips = Array.from({ length: options.sectors }, (_, sector) => {
+    const chip = button("tgp-chip tgp-leg", "", () => arm(armed === sector ? null : sector))
+    legLine.appendChild(chip)
+    return chip
+  })
+  // The ghosts added from the board, or how to add one.
+  const addLine = el("div", "tgp-line")
+  const addHint = el("span", "tgp-fill tgp-dim")
+  const clear = button("tgp-link", "CLEAR", () => online.clearPicked())
+  addLine.append(addHint, clear)
   const meLine = el("div", "tgp-line")
   const meLabel = el("span", "tgp-label")
   const meName = el("span", "tgp-fill")
@@ -165,7 +200,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
   meLine.append(meLabel, meName, meAction)
   const statusLine = el("div", "tgp-line tgp-bad")
   // The maker's plate first, as on the timing panel: it is the one on screen while a lap is shown again.
-  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, cols, rows, showAll, ghostLine, fieldLine, meLine, statusLine)
+  boardPanel.append(createPlateLink(document, 24), boardHead, trackLine, orderLine, cols, rows, showAll, ghostLine, legLine, addLine, meLine, statusLine)
   root.appendChild(boardPanel)
 
   if (options.tracks.length > 1) {
@@ -227,13 +262,16 @@ export const createPanels = (options: PanelsOptions): Panels => {
   const drawBoard = (slide: boolean = false): void => {
     const state = online.state()
     // While a board is held the rows stay as they stood before the lap.
-    const board = held ?? state.board
+    const board = held?.board ?? state.shown
+    const order = held?.order ?? state.order
     const before = slide ? rowTops() : new Map<string, number>()
     const rankBefore = drawnRank
     boardCount.textContent = state.boardLoading && board === null ? "…" : board === null ? "" : `${board.total} ${board.total === 1 ? "DRIVER" : "DRIVERS"}`
     rows.replaceChildren()
     cols.hidden = board === null || board.top.length === 0
-    const marks = raceMarks(state.choice, state.fieldRuns)
+    const marks = raceMarks(state, order)
+    timeHeading.textContent = orderHeading(order)
+    for (const { chip, order: one } of orderChips) chip.setAttribute("aria-pressed", String(one === state.order))
     // Only a board with more than it shows has more to show.
     showAll.hidden = board === null || board.total <= board.top.length + board.around.length
     showAll.textContent = board === null ? "" : `SHOW ALL ${board.total} DRIVERS`
@@ -242,8 +280,9 @@ export const createPanels = (options: PanelsOptions): Panels => {
     } else if (board.top.length === 0) {
       rows.appendChild(el("div", "tgp-empty", "NO LAPS YET: SET THE FIRST"))
     } else {
-      const leaderMs = board.top[0]?.timeMs ?? 0
-      board.top.forEach((entry, i) => rows.appendChild(drawEntry(entry, board.top[i - 1] ?? null, marks, leaderMs, rowActions)))
+      const leader = board.top[0]
+      const look = { marks, order, leaderMs: leader === undefined ? 0 : orderTime(leader, order) }
+      board.top.forEach((entry, i) => rows.appendChild(drawEntry(entry, board.top[i - 1] ?? null, look, rowActions)))
       const around = board.around.filter((entry) => !board.top.some((top) => top.runId === entry.runId))
       if (around.length > 0) {
         const last = board.top[board.top.length - 1]
@@ -251,15 +290,26 @@ export const createPanels = (options: PanelsOptions): Panels => {
         if (last !== undefined && first !== undefined && first.rank > last.rank + 1) rows.appendChild(el("div", "tgp-gap", "···"))
         around.forEach((entry, i) => {
           const before = i === 0 ? last : around[i - 1]
-          rows.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, marks, leaderMs, rowActions))
+          rows.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, look, rowActions))
         })
       }
     }
-    for (const { chip, choice } of ghostChips) chip.setAttribute("aria-pressed", String(sameChoice(choice, state.choice)))
-    for (const { chip, count } of fieldChips) {
-      chip.setAttribute("aria-pressed", String(count === state.field))
-      chip.disabled = state.choice.kind === "none"
-    }
+    for (const { chip, kind } of ghostChips) chip.setAttribute("aria-pressed", String(kind === state.choice.kind))
+    const bySector = state.choice.kind === "sectors"
+    if (!bySector) armed = null
+    legLine.hidden = !bySector
+    legChips.forEach((chip, sector) => {
+      const leg = state.legs[sector]
+      const picked = state.choice.kind === "sectors" && (state.choice.runs[sector] ?? null) !== null
+      chip.textContent = `S${sector + 1} ${armed === sector ? "PICK A DRIVER…" : leg === undefined ? "…" : leg === null ? "YOUR BEST" : leg.name.toUpperCase()}`
+      chip.setAttribute("aria-pressed", String(armed === sector))
+      chip.title = armed === sector
+        ? `Click a driver on the board to race in sector ${sector + 1} (click again to keep ${picked ? "yours" : "the fastest"})`
+        : `${picked ? "Picked" : "The fastest"} in sector ${sector + 1}: click, then a row, to race another there`
+    })
+    const added = state.picked.length
+    addHint.textContent = armed !== null ? `CLICK A DRIVER FOR S${armed + 1}` : added === 0 ? "CLICK A DRIVER TO RACE THEIR GHOST TOO" : `${added} ${added === 1 ? "GHOST" : "GHOSTS"} ADDED · CLICK ONE TO TAKE IT AWAY`
+    clear.hidden = added === 0 || armed !== null
     if (state.identity === null) {
       meLabel.textContent = "NOT ON THE BOARD"
       meName.textContent = ""
@@ -458,7 +508,8 @@ export const createPanels = (options: PanelsOptions): Panels => {
       apply()
     },
     lapFinished() {
-      held = online.state().board
+      const state = online.state()
+      held = state.shown === null ? null : { board: state.shown, order: state.order }
       heldUntil = held === null ? -1 : performance.now() + wipeLeavesMs + 350
     },
     lapShown() {

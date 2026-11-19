@@ -135,6 +135,9 @@
 .tgp-row.tgp-mine .tgp-behind { color: var(--hud-back); opacity: 0.6; }
 .tgp-row .tgp-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
 .tgp-row.tgp-raced .tgp-dot { background: var(--ghost); }
+/* Added beside the ghost: a ring until its lap is in, then its ghost's tint. */
+.tgp-row.tgp-picked .tgp-dot { box-shadow: inset 0 0 0 1.5px var(--hud-text); }
+.tgp-row.tgp-mine.tgp-picked .tgp-dot { box-shadow: inset 0 0 0 1.5px var(--hud-back); }
 /* Watch the run without racing it: dim until the row is pointed at. */
 .tgp-watch {
   width: 20px;
@@ -223,6 +226,12 @@
   white-space: nowrap;
 }
 .tgp-chip:hover, .tgp-button:hover { background: rgba(255, 255, 255, 0.2); }
+.tgp-chip:disabled { opacity: 0.4; cursor: default; }
+.tgp-chip:disabled:hover { background: rgba(255, 255, 255, 0.1); }
+.tgp-line .tgp-dim { color: var(--hud-dim); font-size: 10px; letter-spacing: 0.5px; }
+/* Racing by sector: each sector's driver, a chip that waits for a row once clicked. */
+.tgp-legs { gap: 4px; }
+.tgp-leg { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
 .tgp-chip[aria-pressed="true"] { background: var(--hud-text); color: var(--hud-back); border-color: var(--hud-text); }
 .tgp-button.tgp-primary { background: var(--hud-accent); color: var(--hud-back); border-color: var(--hud-accent); }
 .tgp-button.tgp-primary:hover { filter: brightness(1.08); }

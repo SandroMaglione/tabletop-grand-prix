@@ -92,6 +92,7 @@ export class RunsGroup extends HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("board", "/boards/:track", {
       params: { track: Schema.String },
+      query: { sector: Schema.optional(Schema.FiniteFromString) },
       headers: maybeSignedIn,
       success: Board,
       error: NotFoundError
@@ -100,7 +101,7 @@ export class RunsGroup extends HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("page", "/boards/:track/runs", {
       params: { track: Schema.String },
-      query: { from: Schema.FiniteFromString, count: Schema.FiniteFromString },
+      query: { from: Schema.FiniteFromString, count: Schema.FiniteFromString, sector: Schema.optional(Schema.FiniteFromString) },
       headers: maybeSignedIn,
       success: BoardPage,
       error: NotFoundError
@@ -166,8 +167,9 @@ export const layerHttp = (baseUrl: string, options: HttpOptions = {}): Layer.Lay
         register: (name) => settle(client.players.register({ payload: { name } })),
         rename: (identity, name) => settle(client.players.rename({ headers: { authorization: authorization(identity) }, payload: { name } })),
         submit: (identity, replay) => settle(client.runs.submit({ headers: { authorization: authorization(identity) }, payload: { replay } })),
-        board: (track, identity) => settle(client.runs.board({ params: { track }, headers: maybe(identity) })),
-        page: (track, from, count, identity) => settle(client.runs.page({ params: { track }, query: { from, count }, headers: maybe(identity) })),
+        board: (track, identity, order) => settle(client.runs.board({ params: { track }, query: order === null ? {} : { sector: order }, headers: maybe(identity) })),
+        page: (track, from, count, identity, order) =>
+          settle(client.runs.page({ params: { track }, query: order === null ? { from, count } : { from, count, sector: order }, headers: maybe(identity) })),
         rival: (track, fasterThanMs, identity) =>
           settle(
             client.runs.rival({

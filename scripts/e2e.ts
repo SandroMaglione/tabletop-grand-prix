@@ -75,7 +75,7 @@ for (let at = 0; at < submits; at++) {
   check(result.timeMs === Math.floor(kept.timeMs) && result.improved === expected, `submit ${at + 1}/${submits} (${ms} ms)`, result)
 }
 
-const board = await call((service) => service.board(kept.track, identity))
+const board = await call((service) => service.board(kept.track, identity, null))
 check(Exit.isSuccess(board) && board.value.me?.runId === firstRun && board.value.me.mine, "the board shows my run", Exit.isSuccess(board) ? { total: board.value.total, me: board.value.me } : failureOf(board))
 
 // A second player with the same lap, posted later, ranks just behind and is my rival.

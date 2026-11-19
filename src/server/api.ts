@@ -52,6 +52,14 @@ export class AdminGroup extends HttpApiGroup.make("admin")
     })
   )
   .add(
+    HttpApiEndpoint.post("fillSectors", "/admin/sectors", {
+      headers: admin,
+      query: { limit: Schema.optional(Schema.FiniteFromString) },
+      success: Schema.Struct({ filled: Schema.Number, failed: Schema.Number, left: Schema.Number }),
+      error: UnauthorisedError
+    })
+  )
+  .add(
     HttpApiEndpoint.put("rename", "/admin/players/:playerId/name", {
       headers: admin,
       params: { playerId: Schema.String },
@@ -131,8 +139,8 @@ export const serverLayer = <R>(options: ServeOptions<R>) => {
         })
       )
       .handle("replay", ({ params }) => leaderboard.replay(params.runId))
-      .handle("board", ({ params, headers }) => leaderboard.board(params.track, headers.authorization))
-      .handle("page", ({ params, query, headers }) => leaderboard.page(params.track, query.from, query.count, headers.authorization))
+      .handle("board", ({ params, query, headers }) => leaderboard.board(params.track, headers.authorization, query.sector ?? null))
+      .handle("page", ({ params, query, headers }) => leaderboard.page(params.track, query.from, query.count, headers.authorization, query.sector ?? null))
       .handle("rival", ({ params, query, headers }) => leaderboard.rival(params.track, query.fasterThanMs ?? null, headers.authorization))
   )
 
@@ -151,6 +159,8 @@ export const serverLayer = <R>(options: ServeOptions<R>) => {
       .handle("runs", ({ headers, params, query }) =>
         asAdmin(headers.authorization, leaderboard.adminRuns(params.track, params.rules, Math.min(query.limit ?? 50, 500)))
       )
+      // Each run is driven again here: a few at a time, so one request stays well inside the Worker's CPU time.
+      .handle("fillSectors", ({ headers, query }) => asAdmin(headers.authorization, leaderboard.adminFillSectors(Math.max(1, Math.min(Math.floor(query.limit ?? 10), 50)))))
       .handle("rename", ({ headers, params, payload }) =>
         asAdmin(headers.authorization, Effect.map(leaderboard.adminRename(params.playerId, payload.name), (name) => ({ name })))
       )

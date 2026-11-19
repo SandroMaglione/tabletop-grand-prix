@@ -3,14 +3,15 @@
  * lands on the player's own run (the top when they have none) and reads more of the board,
  * a page at a time, as the list is scrolled toward either end. A click on a run races it, and
  * its ▶ watches it (closing the list) and its ▾ drops its splits down, as on the corner board.
+ * It is in the corner board's order (by lap, or by one sector), and its tabs change both.
  *
  * It is modal: while it is open the car is left alone (`open()` is read by the page), and the
  * arrows, Page Up/Down, Home and End scroll the list. The cross, `Esc`, `L` and a click
  * outside close it. What it has read is dropped when it closes; opening it again reads afresh.
  */
-import type { BoardPage, Entry } from "../api/contract.ts"
+import type { BoardOrder, BoardPage, Entry } from "../api/contract.ts"
 import type { Online } from "./online.ts"
-import { button, drawEntry, el, markRow, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
+import { button, drawEntry, el, markRow, orderChoices, orderHeading, orderTime, raceMarks, type RowActions, setHudColours } from "./panels-dom.ts"
 
 /** Runs read at a time. */
 const PAGE = 100
@@ -27,7 +28,7 @@ export interface AllBoard {
   hide(): void
 }
 
-export const createAllBoard = (online: Online, actions: RowActions): AllBoard => {
+export const createAllBoard = (online: Online, actions: RowActions, sectors: number): AllBoard => {
   const root = el("div", "tgp-all")
   setHudColours(root)
   root.hidden = true
@@ -36,7 +37,15 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
   const count = el("span", "tgp-count")
   head.append(el("span", "tgp-title", "LEADERBOARD"), count, button("tgp-x", "×", () => hide()))
   const cols = el("div", "tgp-cols")
-  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), el("span", "", "BEST"), el("span", "", "GAP"), el("span"), el("span"), el("span"))
+  const timeHeading = el("span", "", "BEST")
+  cols.append(el("span", "", "POS"), el("span", "", "DRIVER"), timeHeading, el("span", "", "GAP"), el("span"), el("span"), el("span"))
+  const orderLine = el("div", "tgp-line")
+  orderLine.appendChild(el("span", "tgp-label", "BY"))
+  const orderChips = orderChoices(sectors).map(({ text, order }) => {
+    const chip = button("tgp-chip", text, () => online.setOrder(order))
+    orderLine.appendChild(chip)
+    return { chip, order }
+  })
   const list = el("div", "tgp-rows tgp-all-rows")
   const topLine = el("div", "tgp-all-more")
   const bottomLine = el("div", "tgp-all-more")
@@ -47,7 +56,7 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
   const me = button("tgp-chip", "MY POSITION", () => void jump(myRank()))
   const keys = el("span", "tgp-fill tgp-dim tgp-all-keys", "ESC TO CLOSE")
   foot.append(top, me, keys)
-  panel.append(head, cols, list, foot)
+  panel.append(head, orderLine, cols, list, foot)
   root.appendChild(panel)
   document.body.appendChild(root)
 
@@ -56,14 +65,19 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
   let last = 0
   let total = 0
   let leaderMs = 0
+  /** The order the list was read in; another one reads it afresh. */
+  let drawnOrder: BoardOrder = null
   let loadingUp = false
   let loadingDown = false
   /** Drops answers read for an earlier opening or jump. */
   let generation = 0
   const shown = new Set<string>()
 
-  const myRank = (): number | null => online.state().board?.me?.rank ?? online.state().rank?.rank ?? null
-  const marks = () => raceMarks(online.state().choice, online.state().fieldRuns)
+  const myRank = (): number | null => {
+    const state = online.state()
+    return state.shown?.me?.rank ?? (state.order === null ? state.rank?.rank ?? null : null)
+  }
+  const look = () => ({ marks: raceMarks(online.state(), drawnOrder), order: drawnOrder, leaderMs })
 
   const drawEnds = (): void => {
     topLine.textContent = loadingUp ? "LOADING…" : ""
@@ -72,24 +86,26 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
     bottomLine.hidden = bottomLine.textContent === ""
     count.textContent = total > 0 ? `${total} ${total === 1 ? "DRIVER" : "DRIVERS"}` : ""
     me.disabled = myRank() === null
+    timeHeading.textContent = orderHeading(drawnOrder)
+    for (const { chip, order } of orderChips) chip.setAttribute("aria-pressed", String(order === online.state().order))
   }
 
   const rowsOf = (entries: ReadonlyArray<Entry>): DocumentFragment => {
     const fragment = document.createDocumentFragment()
-    const now = marks()
+    const now = look()
     entries.forEach((entry, i) => {
       // The board may have moved between two reads: a run already drawn is not drawn twice.
       if (shown.has(entry.runId)) return
       shown.add(entry.runId)
       const before = entries[i - 1]
-      fragment.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, now, leaderMs, actions))
+      fragment.appendChild(drawEntry(entry, before !== undefined && before.rank === entry.rank - 1 ? before : null, now, actions))
     })
     return fragment
   }
 
   const took = (page: BoardPage): void => {
     total = page.total
-    if (page.from === 1 && page.entries[0] !== undefined) leaderMs = page.entries[0].timeMs
+    if (page.from === 1 && page.entries[0] !== undefined) leaderMs = orderTime(page.entries[0], drawnOrder)
   }
 
   /** Reads the runs just before those drawn, keeping the list where it was on screen. */
@@ -99,7 +115,7 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
     loadingUp = true
     drawEnds()
     const from = Math.max(1, first - PAGE)
-    const page = await online.page(from, first - from)
+    const page = await online.page(from, first - from, drawnOrder)
     if (request !== generation) return
     loadingUp = false
     if (page !== null) {
@@ -119,7 +135,7 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
     const request = generation
     loadingDown = true
     drawEnds()
-    const page = await online.page(last + 1, PAGE)
+    const page = await online.page(last + 1, PAGE, drawnOrder)
     if (request !== generation) return
     loadingDown = false
     if (page !== null) {
@@ -144,8 +160,8 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
 
   /** Starts the list over at `rank` (the top for none), with that run in the middle. */
   const jump = async (rank: number | null): Promise<void> => {
-    // Already drawn: scroll to it.
-    const drawn = rank === null || rank < first || rank > last ? null : rowAt(rank)
+    // Already drawn in this order: scroll to it.
+    const drawn = rank === null || rank < first || rank > last || online.state().order !== drawnOrder ? null : rowAt(rank)
     if (drawn instanceof HTMLElement) {
       list.scrollTop = drawn.offsetTop - list.clientHeight / 2 + drawn.offsetHeight / 2
       return
@@ -155,11 +171,13 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
     rows.replaceChildren()
     loadingUp = false
     loadingDown = true
-    leaderMs = online.state().board?.top[0]?.timeMs ?? 0
-    total = online.state().board?.total ?? 0
+    drawnOrder = online.state().order
+    const leader = online.state().shown?.top[0]
+    leaderMs = leader === undefined ? 0 : orderTime(leader, drawnOrder)
+    total = online.state().shown?.total ?? 0
     drawEnds()
     const from = rank === null ? 1 : Math.max(1, rank - ABOVE)
-    const page = await online.page(from, PAGE)
+    const page = await online.page(from, PAGE, drawnOrder)
     if (request !== generation) return
     loadingDown = false
     if (page === null) {
@@ -212,10 +230,13 @@ export const createAllBoard = (online: Online, actions: RowActions): AllBoard =>
     event.preventDefault()
   })
 
-  // The raced ghost and the field may change while the list is open.
+  // The raced ghost and the field may change while the list is open, and the order with its tabs.
   online.subscribe(() => {
     if (root.hidden) return
-    const now = marks()
+    const state = online.state()
+    // Another order: read afresh once its board is in, to land on the player's place in it.
+    if (state.order !== drawnOrder && (state.shown !== null || !state.boardLoading)) return void jump(myRank())
+    const now = raceMarks(state, drawnOrder)
     for (const row of rows.querySelectorAll<HTMLElement>(".tgp-row")) markRow(row, now)
     drawEnds()
   })

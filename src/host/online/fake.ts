@@ -12,9 +12,10 @@
  * Every answer comes after a short wait, like a network.
  */
 import { Effect, Layer } from "effect"
-import { type Board, type BoardPage, type Entry, type Identity, Leaderboard, pageMax, type NameRefused, type NameTaken, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../../api/contract.ts"
+import { type Board, type BoardOrder, type BoardPage, type Entry, type Identity, Leaderboard, pageMax, type NameRefused, type NameTaken, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../../api/contract.ts"
 import { nameShape, tidyName } from "../../api/names.ts"
-import { replayFromText, rulesVersion, runReplay, type Steering } from "../../sim/index.ts"
+import { sectorCount, wholeSectors } from "../../api/sectors.ts"
+import { replayFromText, rulesVersion, runReplay, type Steering, trackById } from "../../sim/index.ts"
 import { makeHandle } from "../handles.ts"
 import fixture from "./fake-runs.json" with { type: "json" }
 
@@ -161,17 +162,53 @@ export const layerFake = (options: FakeOptions = {}): Layer.Layer<Leaderboard> =
     return player !== undefined && player.secret === identity.secret ? player : null
   }
 
-  /** The runs of a board, fastest first; the earlier run first on a tie. */
-  const ranked = (track: string): ReadonlyArray<Run> => [...board(track, rulesVersion).values()].sort((a, b) => a.timeMs - b.timeMs)
+  /** Each replay driven for its sectors, once (the padding borrows the fixture's replays): its splits and time, or null when it does not drive. */
+  const driven = new Map<string, { readonly splitsMs: ReadonlyArray<number>; readonly timeMs: number } | null>()
+  /** A run's sectors as the server files them. A padded run's are its borrowed lap's, stretched to its own time. */
+  const sectorsOf = (track: string, run: Run): ReadonlyArray<number> | null => {
+    let lap = driven.get(run.replay)
+    if (lap === undefined) {
+      const bytes = replayFromText(run.replay)
+      const got = bytes === null ? null : runReplay(bytes, { ghost: false })
+      lap = got === null || !got.ok ? null : { splitsMs: got.splitsMs, timeMs: got.timeMs }
+      driven.set(run.replay, lap)
+    }
+    const found = trackById(track)
+    if (lap === null || found === undefined) return null
+    const stretch = Math.floor(lap.timeMs) === run.timeMs ? 1 : run.timeMs / lap.timeMs
+    return wholeSectors(lap.splitsMs.map((ms) => ms * stretch), run.timeMs, sectorCount(found.data))
+  }
+  /** Whether the board can be read in `order`: by the lap, or by one of the track's sectors. */
+  const hasOrder = (track: string, order: BoardOrder): boolean => {
+    if (order === null) return true
+    const found = trackById(track)
+    return found !== undefined && Number.isInteger(order) && order >= 0 && order < sectorCount(found.data)
+  }
 
-  const entry = (run: Run, rank: number, me: string | null): Entry => ({
-    rank,
-    runId: run.runId,
-    name: players.get(run.playerId)?.name ?? "?",
-    timeMs: run.timeMs,
-    steering: run.steering,
-    mine: run.playerId === me
-  })
+  /** The runs of a board in `order`, fastest first; the earlier run first on a tie. By a sector, only the runs that drive. */
+  const ranked = (track: string, order: BoardOrder = null): ReadonlyArray<Run> => {
+    const runs = [...board(track, rulesVersion).values()]
+    if (order === null) return runs.sort((a, b) => a.timeMs - b.timeMs)
+    const keyed = runs.flatMap((run) => {
+      const ms = sectorsOf(track, run)?.[order]
+      return ms === undefined ? [] : [{ run, ms }]
+    })
+    return keyed.sort((a, b) => a.ms - b.ms).map((one) => one.run)
+  }
+
+  const entry = (track: string, run: Run, rank: number, me: string | null): Entry => {
+    // Only once driven for a board by sector: the board by lap does not drive every replay.
+    const sectorsMs = driven.has(run.replay) ? sectorsOf(track, run) : null
+    return {
+      rank,
+      runId: run.runId,
+      name: players.get(run.playerId)?.name ?? "?",
+      timeMs: run.timeMs,
+      steering: run.steering,
+      mine: run.playerId === me,
+      ...(sectorsMs === null ? {} : { sectorsMs })
+    }
+  }
 
   return Layer.succeed(
     Leaderboard,
@@ -228,26 +265,28 @@ export const layerFake = (options: FakeOptions = {}): Layer.Layer<Leaderboard> =
             return Effect.succeed({ runId: kept.runId, timeMs, improved, rank: order.indexOf(kept) + 1, total: order.length })
           })
         ),
-      board: (track, identity) =>
+      board: (track, identity, by) =>
         answer(
           Effect.suspend(() => {
+            if (!hasOrder(track, by)) return Effect.fail({ _tag: "NotFound" } as const)
             const me = identity === null ? null : known(identity)?.id ?? null
-            const order = ranked(track)
-            const entries = order.map((run, i) => entry(run, i + 1, me))
+            const order = ranked(track, by)
+            const entries = order.map((run, i) => entry(track, run, i + 1, me))
             const mine = entries.find((one) => one.mine) ?? null
             const top = entries.slice(0, topCount)
             const around = mine === null || mine.rank <= topCount ? [] : entries.slice(Math.max(0, mine.rank - 1 - aroundCount), mine.rank + aroundCount)
             return Effect.succeed({ track, rules: rulesVersion, total: order.length, top, around, me: mine } satisfies Board)
           })
         ),
-      page: (track, from, count, identity) =>
+      page: (track, from, count, identity, by) =>
         answer(
           Effect.suspend(() => {
+            if (!hasOrder(track, by)) return Effect.fail({ _tag: "NotFound" } as const)
             const me = identity === null ? null : known(identity)?.id ?? null
-            const order = ranked(track)
+            const order = ranked(track, by)
             const first = Math.max(1, Math.floor(from))
             const size = Math.max(1, Math.min(pageMax, Math.floor(count)))
-            const entries = order.slice(first - 1, first - 1 + size).map((run, i) => entry(run, first + i, me))
+            const entries = order.slice(first - 1, first - 1 + size).map((run, i) => entry(track, run, first + i, me))
             return Effect.succeed({ track, rules: rulesVersion, total: order.length, from: first, entries } satisfies BoardPage)
           })
         ),
@@ -255,7 +294,7 @@ export const layerFake = (options: FakeOptions = {}): Layer.Layer<Leaderboard> =
         answer(
           Effect.suspend(() => {
             const me = identity === null ? null : known(identity)?.id ?? null
-            const entries = ranked(track).map((run, i) => entry(run, i + 1, me))
+            const entries = ranked(track).map((run, i) => entry(track, run, i + 1, me))
             const ahead = entries.filter((one) => !one.mine && (fasterThanMs === null || one.timeMs < fasterThanMs))
             return Effect.succeed(ahead[ahead.length - 1] ?? null)
           })
