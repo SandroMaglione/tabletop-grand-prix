@@ -415,18 +415,32 @@ test("a run is filed with its sectors, and a board by one sector ranks the runs 
   assert.deepEqual(((await raw.json()) as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name), ["Quick", "Sandro"])
 })
 
-test("the admin files the sectors of runs sent before the server kept them", async () => {
+test("the admin files the sectors of runs sent before the server kept them, only ones that add up to the filed time", async () => {
   const server = serve()
-  for (let at = 0; at < 3; at++) server.seed(`Old${at}`, 30_000 + at)
+  const ids = [0, 1, 2].map((at) => server.seed(`Old${at}`, 30_000 + at))
   const admin = await Effect.runPromise(makeAdminClient("http://leaderboard.test", server.fetch))
   const headers = { authorization: `Bearer ${adminSecret}` }
+  const runAdmin = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.exit(effect))
   assert.equal((await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, 0)))).total, 0)
-  assert.deepEqual(await Effect.runPromise(admin.admin.fillSectors({ headers, query: { limit: 2 } })), { filled: 2, failed: 0, left: 1 })
-  assert.deepEqual(await Effect.runPromise(admin.admin.fillSectors({ headers, query: {} })), { filled: 1, failed: 0, left: 0 })
+
+  const first = await Effect.runPromise(admin.admin.unfiled({ headers, query: { limit: 2 } }))
+  assert.equal(first.left, 3)
+  assert.deepEqual(first.runs.map((one) => one.runId), [...ids].sort().slice(0, 2))
+  assert.equal(first.runs[0]?.replay, kept.replay, "with each run's replay, to drive")
+
+  const file = (runId: string, sectorsMs: ReadonlyArray<number>) => runAdmin(admin.admin.fileSectors({ headers, params: { runId }, payload: { sectorsMs } }))
+  const [a = "", b = "", c = ""] = ids
+  const failure = (exit: Exit.Exit<unknown, unknown>) => (Exit.isFailure(exit) && exit.cause.reasons[0]?._tag === "Fail" ? exit.cause.reasons[0].error : null)
+  assert.deepEqual(failure(await file(a, [10_000, 10_000, 9_999])), { _tag: "RunRefused", fault: "sectors" }, "they must add up to the filed time")
+  assert.deepEqual(failure(await file(a, [15_000, 15_000])), { _tag: "RunRefused", fault: "sectors" }, "one per sector")
+  assert.ok(Exit.isSuccess(await file(a, [10_000, 10_000, 10_000])))
+  assert.deepEqual(failure(await file(a, [9_000, 11_000, 10_000])), { _tag: "NotFound" }, "sectors once filed stay")
+  assert.ok(Exit.isSuccess(await file(b, [9_000, 11_000, 10_001])))
+  assert.ok(Exit.isSuccess(await file(c, [])), "a replay that no longer drives is filed with none")
+  assert.equal((await Effect.runPromise(admin.admin.unfiled({ headers, query: {} }))).left, 0)
+
   const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, 0)))
-  assert.equal(board.total, 3)
-  // Each run's sectors add up to its own filed time.
-  for (const entry of board.top) assert.equal(entry.sectorsMs?.reduce((a, b) => a + b, 0), entry.timeMs)
-  const refused = await Effect.runPromise(Effect.exit(admin.admin.fillSectors({ headers: { authorization: "Bearer wrong" }, query: {} })))
-  assert.ok(Exit.isFailure(refused))
+  assert.deepEqual(board.top.map((entry) => entry.name), ["Old1", "Old0"], "the one with none is not on a board by sector")
+  assert.ok(Exit.isFailure(await runAdmin(admin.admin.unfiled({ headers: { authorization: "Bearer wrong" }, query: {} }))))
+  assert.ok(Exit.isFailure(await runAdmin(admin.admin.fileSectors({ headers: { authorization: "Bearer wrong" }, params: { runId: a }, payload: { sectorsMs: [] } }))))
 })

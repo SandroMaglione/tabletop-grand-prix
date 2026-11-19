@@ -98,7 +98,7 @@ page in progress on 2026-11-15, which already reads `VITE_API_URL`. Deploying ag
 | `GET /boards/:track?sector=` | `board` | signed in or not; `sector` (0 is the first) orders it by that sector |
 | `GET /boards/:track/runs?from=&count=&sector=` | `page` | signed in or not |
 | `GET /boards/:track/rival?fasterThanMs=` | `rival` | signed in or not |
-| `GET /admin/players?search=&limit=`, `GET /admin/boards/:track/:rules`, `PUT /admin/players/:id/name`, `DELETE /admin/runs/:runId`, `POST /admin/players/:id/ban`, `POST /admin/sectors?limit=` | admin | `Authorization: Bearer <ADMIN_SECRET>` |
+| `GET /admin/players?search=&limit=`, `GET /admin/boards/:track/:rules`, `PUT /admin/players/:id/name`, `DELETE /admin/runs/:runId`, `POST /admin/players/:id/ban`, `GET /admin/sectors?limit=`, `PUT /admin/runs/:runId/sectors` | admin | `Authorization: Bearer <ADMIN_SECRET>` |
 
 A player signs a request with `Authorization: Bearer <id>.<secret>`. The secret is 32 random bytes,
 and the server keeps only its SHA-256. A header that does not prove a player is `Unauthorised` on
@@ -127,9 +127,12 @@ the two only differ in the Worker name. The site's own domain in `prod` is allow
   posted first; only runs whose sectors are known are on such a board, and its `total` and `me`
   are of it. A sector the track has not is `NotFound`.
 - Runs filed before migration `0002_sectors` have no sectors until `pnpm admin <stage> fill-sectors`
-  drives their replays again (`POST /admin/sectors`, up to 50 a request, 10 by default; the script
-  asks for 20 at a time until none is left). Run it once after deploying. A replay that no longer
-  drives is filed with `[]` and stays off the sector boards.
+  files them. Run it once after deploying. Driving a replay costs about the Worker's whole CPU time
+  (several in one request are cut off with error 1102), so the script reads the runs without
+  sectors with their replays (`GET /admin/sectors`), drives each on this machine, and files its
+  sectors (`PUT /admin/runs/:runId/sectors`). The server takes them only for a run that has none
+  yet, one whole number per sector adding up to its own `time_ms`; a replay that no longer drives
+  is filed with `[]` and stays off the sector boards.
 - `rival`: the slowest run strictly faster than `fasterThanMs` that is not the asker's, or the
   slowest run on the board when `fasterThanMs` is null. Null when nobody is ahead.
 - Replays over 64 KB of text are refused with `too-large` before anything is decoded. A

@@ -351,28 +351,40 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
   // ── Admin ────────────────────────────────────────────────────────────
 
   /**
-   * Files the sectors of up to `limit` runs filed before the server kept them, by driving their
-   * replays again (some tens of milliseconds each). A replay that no longer drives is filed with
-   * none (`[]`), so it is not tried again. Only runs under these rules: an older rules' lap
-   * would not drive the same. `left` is how many still wait.
+   * Up to `limit` runs filed before the server kept sectors, with their replays, and how many
+   * there are: the admin drives them on their own machine (a replay costs about the Worker's
+   * whole CPU time) and files each one's sectors with `adminFileSectors`. Only runs under these
+   * rules: an older rules' lap would not drive the same.
    */
-  const adminFillSectors = (limit: number): Effect.Effect<{ readonly filled: number; readonly failed: number; readonly left: number }, never, R> =>
+  const adminUnfiled = (limit: number) =>
+    batch([
+      { query: "SELECT id, track, time_ms, replay FROM runs WHERE sectors_ms IS NULL AND rules = ? ORDER BY id LIMIT ?", values: [rulesVersion, limit] },
+      { query: "SELECT COUNT(*) AS total FROM runs WHERE sectors_ms IS NULL AND rules = ?", values: [rulesVersion] }
+    ]).pipe(
+      Effect.map(([rows = [], left]) => ({
+        left: totalOf(left),
+        runs: (rows as ReadonlyArray<{ id: string; track: string; time_ms: number; replay: string }>).map((row) => ({ runId: row.id, track: row.track, timeMs: row.time_ms, replay: row.replay }))
+      }))
+    )
+
+  /**
+   * Files a run's sectors, given by the admin: one whole number per sector of its track adding
+   * up to the time the server filed, or none for a replay that no longer drives. Only a run
+   * without them: sectors once filed are never changed.
+   */
+  const adminFileSectors = (runId: string, sectorsMs: ReadonlyArray<number>): Effect.Effect<void, NotFound | RunRefused, R> =>
     Effect.gen(function* () {
-      const rows = yield* all<{ id: string; track: string; time_ms: number; replay: string }>(
-        "SELECT id, track, time_ms, replay FROM runs WHERE sectors_ms IS NULL AND rules = ? LIMIT ?",
-        [rulesVersion, limit]
-      )
-      let failed = 0
-      const updates = rows.map((row): Statement => {
-        const found = trackById(row.track)
-        const bytes = replayFromText(row.replay)
-        const lap = found === undefined || bytes === null ? null : runReplay(bytes, { ghost: false })
-        const sectors = found !== undefined && lap !== null && lap.ok ? wholeSectors(lap.splitsMs, row.time_ms, sectorCount(found.data)) : []
-        if (sectors.length === 0) failed++
-        return { query: "UPDATE runs SET sectors_ms = ? WHERE id = ? AND sectors_ms IS NULL", values: [JSON.stringify(sectors), row.id] }
-      })
-      const results = yield* batch([...updates, { query: "SELECT COUNT(*) AS total FROM runs WHERE sectors_ms IS NULL AND rules = ?", values: [rulesVersion] }])
-      return { filled: rows.length - failed, failed, left: totalOf(results[results.length - 1]) }
+      const row = yield* one<{ track: string; time_ms: number }>("SELECT track, time_ms FROM runs WHERE id = ? AND sectors_ms IS NULL", [runId])
+      if (row === undefined) return yield* Effect.fail(notFound)
+      const found = trackById(row.track)
+      const fits =
+        sectorsMs.length === 0 ||
+        (found !== undefined &&
+          sectorsMs.length === sectorCount(found.data) &&
+          sectorsMs.every((ms) => Number.isInteger(ms) && ms >= 0) &&
+          sectorsMs.reduce((sum, ms) => sum + ms, 0) === row.time_ms)
+      if (!fits) return yield* Effect.fail(runRefused("sectors"))
+      yield* run("UPDATE runs SET sectors_ms = ? WHERE id = ? AND sectors_ms IS NULL", [JSON.stringify(sectorsMs), runId])
     })
 
   const adminPlayers = (search: string, limit: number) =>
@@ -418,7 +430,8 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
     replay,
     adminPlayers,
     adminRuns,
-    adminFillSectors,
+    adminUnfiled,
+    adminFileSectors,
     adminRename,
     adminRemoveRun,
     adminBan
