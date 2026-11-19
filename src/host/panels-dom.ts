@@ -89,7 +89,7 @@ export const markRow = (row: HTMLElement, marks: RaceMarks): void => {
   row.classList.toggle("tgp-raced", raced)
   row.classList.toggle("tgp-picked", picked && !raced)
   const who = mine ? "your best" : `${row.dataset["name"] ?? ""}'s ghost`
-  row.title = raced ? `Raced as your ghost${row.dataset["lap"] ?? ""}` : picked ? `Click to take away ${who}` : `Click to race ${who} beside yours${row.dataset["lap"] ?? ""}`
+  row.title = raced || picked ? `Click to stop racing ${who}` : `Click to race ${who}${row.dataset["lap"] ?? ""}`
   const inField = marks.fieldRuns.indexOf(runId)
   const dot = row.querySelector<HTMLElement>(".tgp-dot")
   // A run raced beside the ghost wears its ghost's tint.
@@ -98,7 +98,7 @@ export const markRow = (row: HTMLElement, marks: RaceMarks): void => {
 
 /** What a board's rows do, and which of them have their splits open (kept across draws and both boards). */
 export interface RowActions {
-  /** A click on the row: adds its ghost or takes it away (or picks a sector's driver). */
+  /** A click on the row: races its ghost too, or stops racing it (or picks a sector's driver). */
   readonly click: (entry: Entry) => void
   /** Its ▶: watch the run, only the sector the board is ordered by when it is. */
   readonly watch: (entry: Entry, order: BoardOrder) => void

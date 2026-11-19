@@ -95,11 +95,15 @@ export interface Online {
   refreshBoard(): void
   /** Up to `count` runs of this track's board in `order` from rank `from` on, for reading all of it; null when it cannot be had. */
   page(from: number, count: number, order: BoardOrder): Promise<BoardPage | null>
+  /** Races the ghost `choice` asks for, and only it: the runs added go (OFF races nothing at all). Kept. */
   choose(choice: GhostChoice): void
   /** Shows the board by the lap (null) or by one sector; the `fastest` ghost follows it. Kept with the choice. */
   setOrder(order: BoardOrder): void
-  /** Adds a run of the board to race beside the ghost, or takes it away when it is there. Kept. */
-  toggle(runId: string): void
+  /**
+   * A click on a run of the board: races its ghost too, or stops racing it when it races
+   * (added, or as the ghost the choice found: then no ghost is chosen, and the runs added stay). Kept.
+   */
+  toggle(entry: Entry): void
   /** Takes away every run added. */
   clearPicked(): void
   /** Races by sector, with `runId` (null: the fastest there) as the driver of `sector`. */
@@ -402,6 +406,10 @@ export const createOnline = (options: OnlineOptions): Online => {
     return runs.filter((runId): runId is string => runId !== null)
   }
 
+  /** The runs of the board raced as the ghost the choice found: the next closest or the fastest, or each sector's driver. */
+  const racedNow = (): ReadonlyArray<string> =>
+    choice.kind === "sectors" ? legs.flatMap((leg) => (leg === null ? [] : [leg.runId])) : choice.kind === "next" || choice.kind === "fastest" ? racedRuns() : []
+
   /** The runs the player added, less any raced as the ghost: their replays are fetched, then handed on. */
   const pickField = (): void => {
     const raced = new Set(racedRuns())
@@ -556,7 +564,7 @@ export const createOnline = (options: OnlineOptions): Online => {
       if (snapshot !== null) return snapshot
       const me = board?.me ?? null
       const rank = submitted !== null ? { rank: submitted.rank, total: submitted.total } : me !== null && board !== null ? { rank: me.rank, total: board.total } : null
-      const raced = choice.kind === "sectors" ? legs.flatMap((leg) => (leg === null ? [] : [leg.runId])) : choice.kind === "next" || choice.kind === "fastest" ? racedRuns() : []
+      const raced = racedNow()
       snapshot = { enabled, reachable, identity, board, order, shown: shownBoard(), boardLoading, post, rank, choice, raced, legs, picked, fieldRuns, ghostLoading, namePrompts }
       return snapshot
     },
@@ -616,8 +624,20 @@ export const createOnline = (options: OnlineOptions): Online => {
       reached(got)
       return Result.isSuccess(got) ? got.success : null
     },
-    toggle(runId) {
-      picked = picked.includes(runId) ? picked.filter((one) => one !== runId) : [...picked, runId].slice(-maxPicked)
+    toggle(entry) {
+      const { runId } = entry
+      const raced = (entry.mine && choice.kind === "own") || racedNow().includes(runId)
+      if (raced || picked.includes(runId)) {
+        picked = picked.filter((one) => one !== runId)
+        if (!raced) {
+          keepRival()
+          return changed()
+        }
+        choice = { kind: "none" }
+        keepRival()
+        return resolveGhost()
+      }
+      picked = [...picked, runId].slice(-maxPicked)
       keepRival()
       changed()
     },
@@ -636,6 +656,7 @@ export const createOnline = (options: OnlineOptions): Online => {
     },
     choose(next) {
       choice = next
+      picked = []
       keepRival()
       resolveGhost()
     },

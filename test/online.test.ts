@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
-import { type Identity, Leaderboard } from "../src/api/contract.ts"
+import { type Entry, type Identity, Leaderboard } from "../src/api/contract.ts"
 import { boardsLayer, noRival, Outbox, Rivals } from "../src/host/boards.ts"
 import { createGhost, ghostAt, type LapGhost, sectorGhost } from "../src/host/ghost.ts"
 import { createLaps, type FinishResult, type Laps } from "../src/host/laps.ts"
@@ -291,7 +291,8 @@ test("the board by one sector: the fastest raced in it, ghosts added from the bo
     return { name: one.name, timeMs: Math.floor(one.timeMs), sectors: wholeSectors(lap.splitsMs, lap.timeMs, 3) }
   })
   const fastestBy = (key: (one: (typeof runs)[number]) => number): Array<string> => [...runs].sort((a, b) => key(a) - key(b)).map((one) => one.name)
-  const idOf = (name: string | undefined): string => online.state().shown?.top.find((one) => one.name === name)?.runId ?? assert.fail(`no ${name} on the board`)
+  const rowOf = (name: string | undefined): Entry => online.state().shown?.top.find((one) => one.name === name) ?? assert.fail(`no ${name} on the board`)
+  const idOf = (name: string | undefined): string => rowOf(name).runId
 
   // The fastest by lap, then by the second sector: the board and the raced ghost follow the order.
   online.choose({ kind: "fastest" })
@@ -307,19 +308,24 @@ test("the board by one sector: the fastest raced in it, ghosts added from the bo
   await until("the fastest in S2", () => ghost.current()?.name === bySecond[0])
   assert.deepEqual(beside, [], "nothing beside it until the player adds a run")
 
-  // Runs clicked on the board race beside it, in the order added; the raced one is not doubled; a click again takes one away.
-  online.toggle(idOf(bySecond[3]))
-  online.toggle(idOf(bySecond[1]))
-  online.toggle(idOf(bySecond[0]))
+  // Runs clicked on the board race too, in the order clicked; a click again stops one, the chosen ghost's own row included.
+  online.toggle(rowOf(bySecond[3]))
+  online.toggle(rowOf(bySecond[1]))
   await until("two beside", () => beside.join() === [bySecond[3], bySecond[1]].join())
-  assert.equal(online.state().picked.length, 3)
-  online.toggle(idOf(bySecond[3]))
-  await until("one beside", () => beside.join() === bySecond[1])
-  online.clearPicked()
-  await until("none beside", () => beside.length === 0)
+  assert.equal(online.state().choice.kind, "fastest", "picking by hand leaves the chosen ghost")
+  online.toggle(rowOf(bySecond[0]))
+  await until("the fastest no longer raced", () => ghost.current() === null)
+  assert.equal(online.state().choice.kind, "none")
+  assert.deepEqual(beside, [bySecond[3], bySecond[1]], "the ones picked by hand stay")
+  online.toggle(rowOf(bySecond[0]))
+  await until("raced again, by hand", () => beside.join() === [bySecond[3], bySecond[1], bySecond[0]].join())
+  online.toggle(rowOf(bySecond[3]))
+  await until("one taken away", () => beside.join() === [bySecond[1], bySecond[0]].join())
 
-  // One driver per sector: the fastest in each, an ideal lap; then another picked for the last sector.
+  // One driver per sector: the others go. The fastest in each, an ideal lap; then another picked for the last sector.
   online.choose({ kind: "sectors", runs: [] })
+  await until("none beside", () => beside.length === 0)
+  assert.deepEqual(online.state().picked, [])
   const fastestIn = [0, 1, 2].map((i) => fastestBy((one) => one.sectors[i] ?? 0)[0])
   await until("a ghost by sector", () => ghost.current()?.kind === "sectors" && !online.state().ghostLoading)
   assert.deepEqual(online.state().legs.map((leg) => leg?.name), fastestIn)
@@ -334,12 +340,20 @@ test("the board by one sector: the fastest raced in it, ghosts added from the bo
 
   // The choice, the order and the runs added are kept for the next visit; a sector the track has not is the lap.
   const added = runs.map((one) => one.name).find((name) => !online.state().legs.some((leg) => leg?.name === name))
-  online.toggle(idOf(added))
+  online.toggle(rowOf(added))
   const kept = await run(Rivals.use((rivals) => rivals.get(entry.id, rulesVersion)))
   assert.deepEqual([kept?.choice, kept?.order, kept?.picked], [{ kind: "sectors", runs: [null, null, idOf(other)] }, 2, [idOf(added)]])
+  await until("one beside the ghost by sector", () => beside.length === 1)
+  // A sector's driver's row, clicked, stops the ghost by sector; OFF then races nothing at all.
+  online.toggle(rowOf(other))
+  await until("no ghost by sector", () => ghost.current() === null && online.state().legs.length === 0)
+  assert.equal(beside.length, 1)
+  online.choose({ kind: "none" })
+  await until("nothing at all", () => beside.length === 0)
+  assert.deepEqual(online.state().picked, [])
   online.setOrder(7)
   assert.equal(online.state().order, null)
-  await until("the board by lap again", () => !online.state().boardLoading && !online.state().ghostLoading && beside.length === 1)
+  await until("the board by lap again", () => !online.state().boardLoading && !online.state().ghostLoading)
   await new Promise((resolve) => setTimeout(resolve, 50))
   await app.dispose()
 })

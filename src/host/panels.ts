@@ -6,8 +6,9 @@
  * - the board: the Typeonce plate as its first row (a link to typeonce.games), then the top
  *   runs, the player's own with its neighbours, the total, which ghost to race (the next
  *   closest, the fastest, one driver per sector, their best, or none), the player's name with
- *   "change", and the tracks when there is more than one. A click on a row adds that run's
- *   ghost beside the raced one, or takes it away; its ▶ watches it without racing.
+ *   "change", and the tracks when there is more than one. A choice races that ghost alone
+ *   (OFF, none at all); then a click on any row races its ghost too, or stops racing it,
+ *   the chosen one included; its ▶ watches it without racing.
  *   BY orders the board by the lap or by one sector (each row then shows its time in that
  *   sector, and ▶ shows that sector alone, again and again); FASTEST races the fastest in
  *   the order shown. BY SECTOR races one driver per sector, the fastest in each unless the
@@ -105,7 +106,7 @@ export const createPanels = (options: PanelsOptions): Panels => {
     if (armed !== null) {
       online.setLeg(armed, entry.runId)
       arm(null)
-    } else online.toggle(entry.runId)
+    } else online.toggle(entry)
   }
   /** The runs whose splits are open, on this board and the whole one alike, for the visit. */
   const openSplits = new Set<string>()
@@ -170,12 +171,13 @@ export const createPanels = (options: PanelsOptions): Panels => {
     ["FASTEST", "fastest", "The fastest run of the board, in the order it is shown"],
     ["BY SECTOR", "sectors", "One driver per sector, the fastest in each unless you pick: at each line the ghost becomes the next sector's driver, from beside you"],
     ["MY BEST", "own", "Your own best lap"],
-    ["OFF", "none", "No ghost (the ones you added still race)"]
+    ["OFF", "none", "No ghost at all"]
   ] as const).map(([text, kind, title]) => {
+    // A choice races that ghost alone: the ones added by hand go (picked again, it keeps a sector's drivers).
     const chip = button("tgp-chip", text, () => {
-      if (kind === online.state().choice.kind) return
+      const now = online.state().choice
       arm(null)
-      online.choose(kind === "sectors" ? { kind, runs: [] } : { kind })
+      online.choose(kind === "sectors" ? { kind, runs: now.kind === "sectors" ? now.runs : [] } : { kind })
     })
     chip.title = title
     ghostLine.appendChild(chip)
@@ -294,7 +296,8 @@ export const createPanels = (options: PanelsOptions): Panels => {
         })
       }
     }
-    for (const { chip, kind } of ghostChips) chip.setAttribute("aria-pressed", String(kind === state.choice.kind))
+    // OFF is lit only when nothing races; with runs added by hand and no ghost chosen, none is.
+    for (const { chip, kind } of ghostChips) chip.setAttribute("aria-pressed", String(kind === state.choice.kind && (kind !== "none" || state.picked.length === 0)))
     const bySector = state.choice.kind === "sectors"
     if (!bySector) armed = null
     legLine.hidden = !bySector
@@ -308,7 +311,12 @@ export const createPanels = (options: PanelsOptions): Panels => {
         : `${picked ? "Picked" : "The fastest"} in sector ${sector + 1}: click, then a row, to race another there`
     })
     const added = state.picked.length
-    addHint.textContent = armed !== null ? `CLICK A DRIVER FOR S${armed + 1}` : added === 0 ? "CLICK A DRIVER TO RACE THEIR GHOST TOO" : `${added} ${added === 1 ? "GHOST" : "GHOSTS"} ADDED · CLICK ONE TO TAKE IT AWAY`
+    addHint.textContent =
+      armed !== null
+        ? `CLICK A DRIVER FOR S${armed + 1}`
+        : added === 0
+          ? "CLICK A DRIVER TO RACE OR DROP THEIR GHOST"
+          : `${added} ${added === 1 ? "GHOST" : "GHOSTS"} PICKED BY HAND`
     clear.hidden = added === 0 || armed !== null
     if (state.identity === null) {
       meLabel.textContent = "NOT ON THE BOARD"
