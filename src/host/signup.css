@@ -1,0 +1,56 @@
+/*
+ * The email sign-up (`signup.ts`): a panel of the leaderboard's kind (`panels.css`) in the
+ * timing panel's place, top left, as wide as it and scaled like it. It grows downward only.
+ */
+.tgp-signup {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  width: 268px;
+  transform-origin: top left;
+  color: var(--hud-text);
+  font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+.tgp-signup[hidden], .tgp-signup [hidden] { display: none !important; }
+
+.tgp-signup-panel { position: relative; }
+.tgp-signup-form { padding: 15px 14px 14px; gap: 9px; }
+/* The line, with room on its right for the corner's cross. */
+.tgp-signup-form .tgp-hint { padding-right: 22px; font-size: 12px; line-height: 1.45; color: var(--hud-text); }
+.tgp-signup .tgp-input { width: 100%; height: 36px; font-size: 13px; margin-top: 3px; }
+.tgp-signup .tgp-input::placeholder { color: var(--hud-dim); opacity: 0.8; }
+.tgp-signup .tgp-button { width: 100%; height: 32px; font-size: 12px; letter-spacing: 0.8px; }
+.tgp-signup .tgp-button:disabled { opacity: 0.6; }
+/* An error: the field's rim and the message under it in the game's red, until the address is edited. */
+.tgp-signup-error .tgp-input, .tgp-signup-error .tgp-input:focus { border-color: var(--hud-bad); }
+.tgp-signup-note { margin-top: -3px; font-size: 11px; line-height: 1.4; }
+.tgp-signup-done { padding: 9px 0 2px; font-size: 12px; line-height: 1.4; }
+
+/* The close, as the panel's corner control. */
+.tgp-signup-x {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  font-size: 15px;
+  line-height: 24px;
+}
+
+/* The light that crosses the panel once as it comes in (`signup.ts`); never seen otherwise. */
+.tgp-signup-glint {
+  position: absolute;
+  top: -10%;
+  left: 0;
+  width: 34%;
+  height: 120%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  transform: translateX(-120%) skewX(-20deg);
+}

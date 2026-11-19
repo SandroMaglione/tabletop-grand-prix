@@ -23,7 +23,8 @@
  * it, and the live car waits out of sight until the player starts again. The same picture
  * shows a run picked from the board with its ▶ (`watchRun`): that driver's lap, their car
  * painted for their place, with no ghost beside it and the board folded away, until the
- * player starts again (`R`) or picks another run. What the page keeps (settings, name, best lap,
+ * player starts again (`R`) or picks another run. From the second lap of a visit, the replay
+ * of the player's own lap carries the email sign-up in the timing panel's place (`signup.ts`). What the page keeps (settings, name, best lap,
  * rival, runs waiting to be sent) is on Effect services over one store (`storage.ts`); the
  * leaderboard is the `Leaderboard` service, chosen here:
  * - `?server=fake`: the stand-in in the page (`online/fake.ts`), `?server=down` one that never answers;
@@ -56,6 +57,7 @@ import { createPanels } from "./panels.ts"
 import { Profile, layer as profileLayer } from "./profile.ts"
 import { createReplayLook } from "./replay-look.ts"
 import { createRerun, type Rerun, type WatchedRun } from "./rerun.ts"
+import { createSignup } from "./signup.ts"
 import { createSplits } from "./splits.ts"
 import { Settings, layer as settingsLayer } from "./settings.ts"
 import { createStage } from "./stage.ts"
@@ -192,6 +194,11 @@ const panels = createPanels({
   keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 }))),
   watch: (entry) => watchRun(entry),
   splits: createSplits(online, Math.max(1, track.checkpoints.length))
+})
+// The email sign-up, in the timing panel's place beside the replay of the player's own lap.
+const signup = createSignup({
+  done: !(loaded?.settings.signup ?? true),
+  keep: () => void run(Settings.use((settings) => settings.change({ signup: false })))
 })
 /** The wipe covers the window: cut to the lap just driven, and open the board beside it. */
 const showLapAgain = (): void => {
@@ -354,7 +361,10 @@ const loop = FixedLoop.start({
     pending = []
     for (const event of events) {
       if (event.kind === "start") panels.lapStarted()
-      else if (event.kind === "finish") panels.lapFinished()
+      else if (event.kind === "finish") {
+        panels.lapFinished()
+        signup.lapFinished()
+      }
       actors.handle(event, view)
       hud.handle(event, view)
       audio.handle(event, view, checkpointGap(event))
@@ -380,6 +390,7 @@ const loop = FixedLoop.start({
     passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: racedTag, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
     hud.update(view, { pad: padLabel, car: shown.car, replay: watched !== null ? { kind: "run", run: watched } : replaying ? { kind: "lap" } : null }, seconds)
     panels.update(view.lap.phase === "running")
+    signup.update(replaying && watched === null)
     replayLook.show(replaying)
     audio.update(shown)
     stage.app.ticker.update(nowMs)

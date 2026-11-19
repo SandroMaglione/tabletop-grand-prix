@@ -44,7 +44,7 @@ test("a first visit has the default settings, no name and nothing per board", as
       }
     })
   )
-  assert.deepEqual(seen.settings, { version: 4, muted: false, track: "", board: true, ghosts: 1 })
+  assert.deepEqual(seen.settings, { version: 5, muted: false, track: "", board: true, ghosts: 1, signup: true })
   assert.equal(seen.fresh, true)
   assert.deepEqual(seen.profile, { version: 1, identity: null, asked: false })
   assert.equal(seen.best, null)
@@ -99,7 +99,7 @@ test("an unreadable save is kept aside and reads as nothing", async () => {
     })
   )
   assert.equal(seen.best, null)
-  assert.equal(seen.settings.version, 4)
+  assert.equal(seen.settings.version, 5)
   assert.equal(await Effect.runPromise(store.get(`${key}.unreadable`)), "{ not json")
   assert.equal(await Effect.runPromise(store.get(`${storagePrefix}settings.unreadable`)), JSON.stringify({ version: 9 }))
 })
@@ -115,8 +115,26 @@ test("settings saved before the ghost count keep the board choice and race one g
       return { before, after }
     })
   )
-  assert.deepEqual(seen.before, { version: 4, muted: true, track: "elsewhere", board: false, ghosts: 1 })
+  assert.deepEqual(seen.before, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 1, signup: true })
   assert.equal(seen.after.ghosts, 10)
+})
+
+test("settings saved before the email sign-up keep everything and may still offer it; once declined it stays declined", async () => {
+  const store = await makeStore({ [`${storagePrefix}settings`]: JSON.stringify({ version: 4, muted: true, track: "elsewhere", board: false, ghosts: 5 }) })
+  const seen = await visit(
+    store,
+    Effect.gen(function*() {
+      const settings = yield* Settings
+      const before = yield* settings.saved
+      yield* settings.change({ signup: false })
+      return before
+    })
+  )
+  assert.deepEqual(seen, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 5, signup: true })
+  const again = await visit(store, Settings.use((settings) => settings.saved))
+  assert.deepEqual(again, { version: 5, muted: true, track: "elsewhere", board: false, ghosts: 5, signup: false })
+  const raw = await Effect.runPromise(store.get(`${storagePrefix}settings`))
+  assert.ok(raw !== undefined && JSON.parse(raw).version === 5)
 })
 
 test("the outbox keeps only the fastest run waiting, and forgets it once sent", async () => {
