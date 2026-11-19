@@ -13,9 +13,10 @@ import { authorization, layerHttp } from "../src/api/http.ts"
 import { makeAdminClient } from "../src/server/admin-client.ts"
 import { serverLayer } from "../src/server/api.ts"
 import { makeLeaderboard, maxReplayText } from "../src/server/leaderboard.ts"
+import { wholeSectors } from "../src/api/sectors.ts"
 import type { Limiter } from "../src/server/limits.ts"
 import type { Sql } from "../src/server/sql.ts"
-import { decodeReplay, replayFromText, replayToText, rulesVersion } from "../src/sim/index.ts"
+import { decodeReplay, replayFromText, replayToText, rulesVersion, runReplay } from "../src/sim/index.ts"
 import { encodeReplay } from "../src/sim/replay.ts"
 import { memorySql } from "./sqlite.ts"
 
@@ -28,8 +29,8 @@ interface Server {
   readonly ok: <A, E>(effect: Effect.Effect<A, E, Leaderboard>) => Promise<A>
   readonly fail: <A, E>(effect: Effect.Effect<A, E, Leaderboard>) => Promise<E>
   readonly fetch: typeof globalThis.fetch
-  /** Puts a player with a run straight into the database, for boards bigger than one real lap can fill. */
-  readonly seed: (name: string, timeMs: number, postedAt?: number) => string
+  /** Puts a player with a run straight into the database, for boards bigger than one real lap can fill. Without sectors, as a run filed before the server kept them. */
+  readonly seed: (name: string, timeMs: number, postedAt?: number, sectorsMs?: ReadonlyArray<number>) => string
   readonly setClock: (ms: number) => void
 }
 
@@ -63,13 +64,13 @@ const serve = (options: { readonly limiter?: Limiter; readonly sql?: Sql } = {})
       assert.ok(error !== undefined && error._tag === "Fail", `expected a failure, got ${String(exit.cause)}`)
       return error.error
     },
-    seed: (name, timeMs, postedAt) => {
+    seed: (name, timeMs, postedAt, sectorsMs) => {
       seeded++
       const playerId = `seed-player-${seeded}`
       memory.db.prepare("INSERT INTO players (id, name, folded, secret_hash, created_at) VALUES (?, ?, ?, ?, ?)").run(playerId, name, `seed${seeded}`, "x", 0)
       memory.db
-        .prepare("INSERT INTO runs (id, player_id, track, rules, time_ms, steering, replay, posted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(`seed-run-${seeded}`, playerId, track, rulesVersion, timeMs, "car", kept.replay, postedAt ?? seeded)
+        .prepare("INSERT INTO runs (id, player_id, track, rules, time_ms, steering, replay, posted_at, sectors_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(`seed-run-${seeded}`, playerId, track, rulesVersion, timeMs, "car", kept.replay, postedAt ?? seeded, sectorsMs === undefined ? null : JSON.stringify(sectorsMs))
       return `seed-run-${seeded}`
     },
     setClock: (ms) => {
@@ -133,7 +134,7 @@ test("a slower run is not kept, a faster one replaces the best and moves up", as
   const slowRun = server.seed("Slow", Math.floor(kept.timeMs) + 500)
   const filed = await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
   assert.deepEqual([filed.improved, filed.rank, filed.total], [true, 2, 3])
-  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me)))
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me, null)))
   assert.deepEqual(
     board.top.map((entry) => [entry.rank, entry.name, entry.mine]),
     [
@@ -152,7 +153,7 @@ test("ties rank by who posted first", async () => {
   server.seed("Second", 20_000, 200)
   server.seed("First", 20_000, 100)
   server.seed("Fastest", 19_999, 300)
-  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null)))
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, null)))
   assert.deepEqual(
     board.top.map((entry) => entry.name),
     ["Fastest", "First", "Second"]
@@ -168,7 +169,7 @@ test("a board shows the top ten, and the asking player's run with two each side"
   for (let at = 0; at < 14; at++) server.seed(`Ahead${at}`, mine - 1000 + at)
   for (let at = 0; at < 6; at++) server.seed(`Behind${at}`, mine + 1 + at)
   await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
-  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me)))
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me, null)))
   assert.equal(board.total, 21)
   assert.equal(board.rules, rulesVersion)
   assert.deepEqual(
@@ -188,7 +189,7 @@ test("a board shows the top ten, and the asking player's run with two each side"
   assert.equal(board.me?.rank, 15)
   assert.ok(board.around.find((entry) => entry.mine)?.name === "Sandro")
   // Seen by nobody, the same board has no `me` and no `around`.
-  const anonymous = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null)))
+  const anonymous = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, null)))
   assert.deepEqual([anonymous.me, anonymous.around, anonymous.total], [null, [], 21])
 })
 
@@ -200,7 +201,7 @@ test("the whole board reads a page at a time from any rank, the asking player's 
   for (let at = 0; at < 250; at++) server.seed(`Ahead${at}`, mine - 1000 + at)
   for (let at = 0; at < 49; at++) server.seed(`Behind${at}`, mine + 1 + at)
   await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
-  const page = (from: number, count: number, who: typeof me | null = me) => server.ok(Effect.flatMap(lb, (service) => service.page(track, from, count, who)))
+  const page = (from: number, count: number, who: typeof me | null = me) => server.ok(Effect.flatMap(lb, (service) => service.page(track, from, count, who, null)))
 
   const around = await page(249, 5)
   assert.deepEqual([around.total, around.from, around.rules], [300, 249, rulesVersion])
@@ -230,7 +231,7 @@ test("the whole board reads a page at a time from any rank, the asking player's 
   assert.deepEqual((await page(301, 100)).entries, [])
   // Ranks before the first read from the first.
   assert.equal((await page(-5, 3)).from, 1)
-  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.page("nowhere", 1, 10, null))), { _tag: "NotFound" })
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.page("nowhere", 1, 10, null, null))), { _tag: "NotFound" })
 })
 
 test("just under the top ten, `around` leaves out what `top` already shows", async () => {
@@ -240,7 +241,7 @@ test("just under the top ten, `around` leaves out what `top` already shows", asy
   for (let at = 0; at < 10; at++) server.seed(`Ahead${at}`, mine - 100 + at)
   for (let at = 0; at < 5; at++) server.seed(`Behind${at}`, mine + 1 + at)
   await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
-  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me)))
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me, null)))
   assert.deepEqual(
     board.around.map((entry) => entry.rank),
     [11, 12, 13]
@@ -272,7 +273,7 @@ test("the rival is the slowest run still ahead, never the player's own", async (
 
 test("unknown tracks and runs are not found", async () => {
   const server = serve()
-  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.board("nowhere", null))), { _tag: "NotFound" })
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.board("nowhere", null, null))), { _tag: "NotFound" })
   assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.rival("nowhere", null, null))), { _tag: "NotFound" })
   assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.replay("nope"))), { _tag: "NotFound" })
 })
@@ -294,7 +295,7 @@ test("a rename keeps the player's runs, and only the device with the secret can 
   assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.rename(forged, "Thief"))), { _tag: "Unauthorised" })
   assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.submit(forged, kept.replay))), { _tag: "Unauthorised" })
   // A bad identity on a read is the same as none.
-  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, forged)))
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, forged, null)))
   assert.equal(board.me, null)
 })
 
@@ -312,7 +313,7 @@ test("every failure the contract does not name reaches the game as Unavailable",
   const broken: Sql = { all: down, run: down, batch: down }
   const server = serve({ sql: broken })
   assert.deepEqual(await server.fail(register("Sandro")), { _tag: "Unavailable" })
-  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.board(track, null))), { _tag: "Unavailable" })
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.board(track, null, null))), { _tag: "Unavailable" })
   const offline = layerHttp("http://leaderboard.test", { fetch: () => Promise.reject(new TypeError("Failed to fetch")) })
   const failureOf = async (layer: typeof offline) => {
     const exit = await Effect.runPromise(Effect.exit(Effect.provide(register("Sandro"), layer)))
@@ -375,5 +376,57 @@ test("the admin lists, renames, removes a run and bans, and nobody else can", as
   assert.deepEqual(await Effect.runPromise(admin.admin.ban({ headers: asAdmin, params: { playerId: me.id } })), { runsRemoved: 1 })
   assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.submit(me, kept.replay))), { _tag: "Unauthorised" })
   assert.deepEqual(await server.fail(register("Sandro")), { _tag: "NameTaken" }, "a banned name stays taken")
-  assert.equal((await server.ok(Effect.flatMap(lb, (service) => service.board(track, null)))).total, 0)
+  assert.equal((await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, null)))).total, 0)
+})
+
+test("a run is filed with its sectors, and a board by one sector ranks the runs by that sector alone", async () => {
+  const server = serve()
+  const me = await server.ok(register("Sandro"))
+  const filed = await server.ok(Effect.flatMap(lb, (service) => service.submit(me, kept.replay)))
+  const bytes = replayFromText(kept.replay)
+  assert.ok(bytes !== null)
+  const lap = runReplay(bytes, { ghost: false })
+  assert.ok(lap.ok)
+  const mine = wholeSectors(lap.splitsMs, lap.timeMs, 3)
+  assert.equal(mine.reduce((a, b) => a + b, 0), filed.timeMs, "whole sectors add up to the filed time")
+
+  // Three others: one fastest by lap, one fastest in the first sector, one that will not drive and none known.
+  const [a, b, c] = mine as [number, number, number]
+  server.seed("Quick", filed.timeMs - 500, 1, [a + 100, b - 400, c - 200])
+  server.seed("Starter", filed.timeMs + 300, 2, [a - 300, b + 400, c + 200])
+  server.seed("Unknown", filed.timeMs + 900)
+
+  const byLap = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me, null)))
+  assert.deepEqual(byLap.top.map((entry) => entry.name), ["Quick", "Sandro", "Starter", "Unknown"])
+  assert.deepEqual(byLap.top[1]?.sectorsMs, mine, "a board's lines carry the sectors")
+  assert.equal(byLap.top[3]?.sectorsMs, undefined, "and leave them out where they are not known")
+
+  const first = await server.ok(Effect.flatMap(lb, (service) => service.board(track, me, 0)))
+  assert.deepEqual(first.top.map((entry) => [entry.rank, entry.name]), [[1, "Starter"], [2, "Sandro"], [3, "Quick"]])
+  assert.equal(first.total, 3, "a run without its sectors is not on a board by sector")
+  assert.equal(first.me?.rank, 2)
+  const second = await server.ok(Effect.flatMap(lb, (service) => service.page(track, 1, 10, null, 1)))
+  assert.deepEqual(second.entries.map((entry) => [entry.rank, entry.name]), [[1, "Quick"], [2, "Sandro"], [3, "Starter"]])
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.board(track, null, 3))), { _tag: "NotFound" }, "no fourth sector")
+  assert.deepEqual(await server.fail(Effect.flatMap(lb, (service) => service.page(track, 1, 5, null, -1))), { _tag: "NotFound" })
+
+  // Through HTTP, the order is a query.
+  const raw = await server.fetch(`http://leaderboard.test/boards/${track}/runs?from=1&count=2&sector=1`)
+  assert.deepEqual(((await raw.json()) as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name), ["Quick", "Sandro"])
+})
+
+test("the admin files the sectors of runs sent before the server kept them", async () => {
+  const server = serve()
+  for (let at = 0; at < 3; at++) server.seed(`Old${at}`, 30_000 + at)
+  const admin = await Effect.runPromise(makeAdminClient("http://leaderboard.test", server.fetch))
+  const headers = { authorization: `Bearer ${adminSecret}` }
+  assert.equal((await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, 0)))).total, 0)
+  assert.deepEqual(await Effect.runPromise(admin.admin.fillSectors({ headers, query: { limit: 2 } })), { filled: 2, failed: 0, left: 1 })
+  assert.deepEqual(await Effect.runPromise(admin.admin.fillSectors({ headers, query: {} })), { filled: 1, failed: 0, left: 0 })
+  const board = await server.ok(Effect.flatMap(lb, (service) => service.board(track, null, 0)))
+  assert.equal(board.total, 3)
+  // Each run's sectors add up to its own filed time.
+  for (const entry of board.top) assert.equal(entry.sectorsMs?.reduce((a, b) => a + b, 0), entry.timeMs)
+  const refused = await Effect.runPromise(Effect.exit(admin.admin.fillSectors({ headers: { authorization: "Bearer wrong" }, query: {} })))
+  assert.ok(Exit.isFailure(refused))
 })

@@ -3,7 +3,8 @@
  * its own key from `boardKey`:
  *
  * - `Bests`: the best lap driven here, as its replay with its time and splits.
- * - `Rivals`: which ghost the player races, and the last rival's run, so it is there offline.
+ * - `Rivals`: which ghost the player races, the runs they added beside it, how the board is
+ *   shown (by lap or by one sector), and the last rival's run, so it is there offline.
  * - `Outbox`: the run waiting to be sent to the leaderboard. Only the fastest is kept: a
  *   board keeps each player's best, so a slower one would change nothing.
  *
@@ -52,32 +53,65 @@ export const bestsLayer: Layer.Layer<Bests, never, KeyValueStore.KeyValueStore> 
 
 // ── the rival ──────────────────────────────────────────────────────────
 
-/**
- * Which ghost to race:
- * - `next`: the next closest, the slowest run still faster than the player's best;
- * - `run`: one run the player chose from the board;
- * - `own`: the player's own best;
- * - `none`: no ghost.
- */
-export const GhostChoice = Schema.Union([
+/** Which ghost to race, until the player could race the fastest runs or one driver per sector, and add ghosts from the board. */
+const GhostChoiceV1 = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("next") }),
   Schema.Struct({ kind: Schema.Literal("run"), runId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("own") }),
   Schema.Struct({ kind: Schema.Literal("none") })
 ])
+
+/**
+ * Which ghost to race:
+ * - `next`: the next closest, the slowest run still faster than the player's best;
+ * - `fastest`: the fastest run of the board in the order it is shown (the lap, or one sector);
+ * - `sectors`: one driver per sector, `runs[i]` for sector `i` (null: the fastest in it), the
+ *   ghost becoming the next one's at each line the player crosses (`SectorGhost`);
+ * - `own`: the player's own best;
+ * - `none`: no ghost.
+ *
+ * The runs the player adds from the board race beside it (`SavedRival.picked`).
+ */
+export const GhostChoice = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("next") }),
+  Schema.Struct({ kind: Schema.Literal("fastest") }),
+  Schema.Struct({ kind: Schema.Literal("sectors"), runs: Schema.Array(Schema.NullOr(Schema.String)) }),
+  Schema.Struct({ kind: Schema.Literal("own") }),
+  Schema.Struct({ kind: Schema.Literal("none") })
+])
 export type GhostChoice = typeof GhostChoice.Type
 
+/** How the board is shown: by the lap (null) or by one sector (0 is the first). */
+export const BoardOrder = Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
+
+/** Until the board could be shown by sector and ghosts added from it. */
 export const RivalV1 = Schema.Struct({
   version: Schema.Literal(1),
+  choice: GhostChoiceV1,
+  run: Schema.NullOr(RunReplay)
+})
+export const RivalV2 = Schema.Struct({
+  version: Schema.Literal(2),
   choice: GhostChoice,
+  /** How the board is shown, which the `fastest` ghost follows. */
+  order: BoardOrder,
+  /** The runs of the board the player added to race beside the ghost, in the order added. */
+  picked: Schema.Array(Schema.String),
   /** The last rival's run, kept for when the server cannot be reached. */
   run: Schema.NullOr(RunReplay)
 })
-const RivalJson = Schema.fromJsonString(Schema.Union([RivalV1]))
-const RivalLatest = Schema.fromJsonString(RivalV1)
-export type SavedRival = typeof RivalV1.Type
+const RivalJson = Schema.fromJsonString(Schema.Union([RivalV1, RivalV2]))
+const RivalLatest = Schema.fromJsonString(RivalV2)
+export type SavedRival = typeof RivalV2.Type
 
-export const noRival: SavedRival = { version: 1, choice: { kind: "next" }, run: null }
+export const noRival: SavedRival = { version: 2, choice: { kind: "next" }, order: null, picked: [], run: null }
+
+/** A run chosen from the board to race used to be the ghost itself: it races beside the next closest now. */
+const latestRival = (saved: typeof RivalV1.Type | SavedRival): SavedRival => {
+  if (saved.version === 2) return saved
+  if (saved.choice.kind === "run") return { version: 2, choice: { kind: "next" }, order: null, picked: [saved.choice.runId], run: saved.run }
+  return { version: 2, choice: saved.choice, order: null, picked: [], run: saved.run }
+}
 
 export interface RivalsShape {
   readonly get: (track: string, rules: number) => Effect.Effect<SavedRival>
@@ -90,7 +124,7 @@ export const rivalsLayer: Layer.Layer<Rivals, never, KeyValueStore.KeyValueStore
   Rivals,
   Effect.map(gameStore, (store) =>
     Rivals.of({
-      get: (track, rules) => read(store, boardKey("rival", track, rules), RivalJson).pipe(Effect.map((got) => (got._tag === "Read" ? got.value : noRival))),
+      get: (track, rules) => read(store, boardKey("rival", track, rules), RivalJson).pipe(Effect.map((got) => (got._tag === "Read" ? latestRival(got.value) : noRival))),
       set: (track, rules, rival) => write(store, boardKey("rival", track, rules), RivalLatest, rival)
     })
   )

@@ -29,10 +29,11 @@ export interface FieldRun {
   readonly replay: string
 }
 
-/** A ghost of the field on screen this frame, for the passing tags. */
+/** A ghost of the field on screen this frame, for the marks of passing it (`passes.ts`). */
 export interface FieldGhost {
   readonly key: string
-  readonly name: string
+  /** A run of the board: its passing is marked (a crowd's bot lap is not). */
+  readonly marked: boolean
   readonly color: number
   readonly pose: GhostPose | null
 }
@@ -167,7 +168,7 @@ export const createField = (parent: Container3D, options: { readonly crowd?: { r
         model.root.rotation.y = pose.yaw
         model.pitch.rotation.x = -pose.pitch
         model.roll.rotation.z = pose.roll
-        shown.push({ key: run.key, name: run.name, color: fieldTint(i), pose: { ...pose, fade } })
+        shown.push({ key: run.key, marked: run.name !== "", color: fieldTint(i), pose: { ...pose, fade } })
       }
     },
     ghosts: () => shown,

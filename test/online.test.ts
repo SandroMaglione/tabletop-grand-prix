@@ -7,9 +7,9 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import * as KeyValueStore from "effect/persistence/KeyValueStore"
-import { type Identity, Leaderboard } from "../src/api/contract.ts"
-import { boardsLayer, noRival, Outbox } from "../src/host/boards.ts"
-import { createGhost } from "../src/host/ghost.ts"
+import { type Entry, type Identity, Leaderboard } from "../src/api/contract.ts"
+import { boardsLayer, noRival, Outbox, Rivals } from "../src/host/boards.ts"
+import { createGhost, ghostAt, type LapGhost, sectorGhost } from "../src/host/ghost.ts"
 import { createLaps, type FinishResult, type Laps } from "../src/host/laps.ts"
 import { answerStatus, shapeStatus } from "../src/host/name-messages.ts"
 import { createOnline, type Online, type OnlineServices } from "../src/host/online.ts"
@@ -18,9 +18,10 @@ import { layerFake } from "../src/host/online/fake.ts"
 import fixture from "../src/host/online/fake-runs.json" with { type: "json" }
 import { layer as profileLayer } from "../src/host/profile.ts"
 import { createRerun } from "../src/host/rerun.ts"
-import { compareSectors, createSplits, sectorTimes } from "../src/host/splits.ts"
+import { sectorTimes, wholeSectors } from "../src/api/sectors.ts"
+import { compareSectors, createSplits } from "../src/host/splits.ts"
 import { standingOf } from "../src/host/standing.ts"
-import { botInput, createSession, idleInput, quantise, replayFromText, rulesVersion, runReplay, tracks, type DriveInput, type RaceView, type TrackEntry } from "../src/sim/index.ts"
+import { botInput, createSession, idleInput, quantise, replayFromText, rulesVersion, runReplay, tracks, type DriveInput, type LapView, type RaceView, type TrackEntry } from "../src/sim/index.ts"
 
 const entry = tracks[0] as TrackEntry
 
@@ -96,12 +97,12 @@ test("the stand-in pads its board to the drivers asked for, and reads it a page 
   const board = await Effect.runPromise(Effect.gen(function*() {
     return yield* Leaderboard
   }).pipe(Effect.provide(layerFake({ storage: null, latencyMs: 0, drivers: 2000 }))))
-  const end = await Effect.runPromise(board.page(entry.id, 1990, 50, null))
+  const end = await Effect.runPromise(board.page(entry.id, 1990, 50, null, null))
   assert.deepEqual([end.total, end.from, end.entries.length], [2000, 1990, 11])
-  const all = await Effect.runPromise(board.page(entry.id, 1, 10_000, null))
+  const all = await Effect.runPromise(board.page(entry.id, 1, 10_000, null, null))
   assert.equal(all.entries.length, 200)
   assert.ok(all.entries.every((one, i) => one.rank === i + 1 && (i === 0 || (all.entries[i - 1]?.timeMs ?? 0) <= one.timeMs)), "fastest first, ranked in order")
-  const top = await Effect.runPromise(board.board(entry.id, null))
+  const top = await Effect.runPromise(board.board(entry.id, null, null))
   assert.deepEqual(top.top.map((one) => one.runId), all.entries.slice(0, 10).map((one) => one.runId))
 })
 
@@ -258,6 +259,129 @@ test("the next closest rival is the slowest run still faster than the player's b
   await app.dispose()
 })
 
+test("the board by one sector: the fastest raced in it, ghosts added from the board, and one driver per sector", async () => {
+  const store = await memoryStore()
+  const { app, run } = page(store, layerFake({ storage: null, latencyMs: 0 }))
+  const laps = createLaps(entry.id, null, () => "car")
+  const ghost = createGhost()
+  let beside: ReadonlyArray<string> = []
+  const online = createOnline({
+    enabled: true,
+    run,
+    track: entry.id,
+    rules: rulesVersion,
+    laps,
+    ghost,
+    identity: null,
+    asked: true,
+    rival: noRival,
+    sectors: 3,
+    raceField: (runs) => {
+      beside = runs.map((one) => one.name)
+    },
+    tracks: [entry.id],
+    defer: (work) => work()
+  })
+  online.start()
+  await until("the board", () => online.state().board !== null && !online.state().ghostLoading)
+  // Each made-up player's sectors, from their replays, fastest first in each sector.
+  const runs = fixture.runs["spindle-leap"].map((one) => {
+    const lap = runReplay(replayFromText(one.replay) ?? new Uint8Array())
+    assert.ok(lap.ok)
+    return { name: one.name, timeMs: Math.floor(one.timeMs), sectors: wholeSectors(lap.splitsMs, lap.timeMs, 3) }
+  })
+  const fastestBy = (key: (one: (typeof runs)[number]) => number): Array<string> => [...runs].sort((a, b) => key(a) - key(b)).map((one) => one.name)
+  const rowOf = (name: string | undefined): Entry => online.state().shown?.top.find((one) => one.name === name) ?? assert.fail(`no ${name} on the board`)
+  const idOf = (name: string | undefined): string => rowOf(name).runId
+
+  // The fastest by lap, then by the second sector: the board and the raced ghost follow the order.
+  online.choose({ kind: "fastest" })
+  const byLap = fastestBy((one) => one.timeMs)
+  await until("the fastest by lap", () => ghost.current()?.name === byLap[0])
+  assert.deepEqual(online.state().raced, [ghost.current()?.runId])
+  online.setOrder(1)
+  const bySecond = fastestBy((one) => one.sectors[1] ?? 0)
+  assert.notDeepEqual(bySecond.slice(0, 3), byLap.slice(0, 3), "the fixture's sectors order the runs otherwise than their laps")
+  await until("the board by S2", () => online.state().shown?.top[0]?.name === bySecond[0] && !online.state().boardLoading)
+  assert.deepEqual(online.state().shown?.top.map((one) => one.name), bySecond.slice(0, 10))
+  assert.equal(online.state().board?.top[0]?.name, byLap[0], "the board by lap is still read, for the player's place")
+  await until("the fastest in S2", () => ghost.current()?.name === bySecond[0])
+  assert.deepEqual(beside, [], "nothing beside it until the player adds a run")
+
+  // Runs clicked on the board race too, in the order clicked; a click again stops one, the chosen ghost's own row included.
+  online.toggle(rowOf(bySecond[3]))
+  online.toggle(rowOf(bySecond[1]))
+  await until("two beside", () => beside.join() === [bySecond[3], bySecond[1]].join())
+  assert.equal(online.state().choice.kind, "fastest", "picking by hand leaves the chosen ghost")
+  online.toggle(rowOf(bySecond[0]))
+  await until("the fastest no longer raced", () => ghost.current() === null)
+  assert.equal(online.state().choice.kind, "none")
+  assert.deepEqual(beside, [bySecond[3], bySecond[1]], "the ones picked by hand stay")
+  online.toggle(rowOf(bySecond[0]))
+  await until("raced again, by hand", () => beside.join() === [bySecond[3], bySecond[1], bySecond[0]].join())
+  online.toggle(rowOf(bySecond[3]))
+  await until("one taken away", () => beside.join() === [bySecond[1], bySecond[0]].join())
+
+  // One driver per sector: the others go. The fastest in each, an ideal lap; then another picked for the last sector.
+  online.choose({ kind: "sectors", runs: [] })
+  await until("none beside", () => beside.length === 0)
+  assert.deepEqual(online.state().picked, [])
+  const fastestIn = [0, 1, 2].map((i) => fastestBy((one) => one.sectors[i] ?? 0)[0])
+  await until("a ghost by sector", () => ghost.current()?.kind === "sectors" && !online.state().ghostLoading)
+  assert.deepEqual(online.state().legs.map((leg) => leg?.name), fastestIn)
+  const ideal = [0, 1, 2].reduce((sum, i) => sum + Math.min(...runs.map((one) => one.sectors[i] ?? 0)), 0)
+  assert.ok(Math.abs((ghost.current()?.timeMs ?? 0) - ideal) < 3, "its time is the ideal lap: the best of each sector")
+  const other = fastestBy((one) => one.sectors[2] ?? 0)[4]
+  online.setOrder(2)
+  await until("the board by S3", () => online.state().shown?.top[0]?.name === fastestIn[2] && !online.state().boardLoading)
+  online.setLeg(2, idOf(other))
+  await until("another for S3", () => online.state().legs[2]?.name === other && !online.state().ghostLoading)
+  assert.deepEqual(online.state().legs.map((leg) => leg?.name), [fastestIn[0], fastestIn[1], other])
+
+  // The choice, the order and the runs added are kept for the next visit; a sector the track has not is the lap.
+  const added = runs.map((one) => one.name).find((name) => !online.state().legs.some((leg) => leg?.name === name))
+  online.toggle(rowOf(added))
+  const kept = await run(Rivals.use((rivals) => rivals.get(entry.id, rulesVersion)))
+  assert.deepEqual([kept?.choice, kept?.order, kept?.picked], [{ kind: "sectors", runs: [null, null, idOf(other)] }, 2, [idOf(added)]])
+  await until("one beside the ghost by sector", () => beside.length === 1)
+  // A sector's driver's row, clicked, stops the ghost by sector; OFF then races nothing at all.
+  online.toggle(rowOf(other))
+  await until("no ghost by sector", () => ghost.current() === null && online.state().legs.length === 0)
+  assert.equal(beside.length, 1)
+  online.choose({ kind: "none" })
+  await until("nothing at all", () => beside.length === 0)
+  assert.deepEqual(online.state().picked, [])
+  online.setOrder(7)
+  assert.equal(online.state().order, null)
+  await until("the board by lap again", () => !online.state().boardLoading && !online.state().ghostLoading)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  await app.dispose()
+})
+
+test("a ghost by sector is each sector's driver, from the line the player crossed, as long after it as the player is", () => {
+  const leg = (name: string, splitsMs: ReadonlyArray<number>): LapGhost => ({ kind: "rival", name, runId: name, timeMs: splitsMs[splitsMs.length - 1] ?? 0, splitsMs, poses: [] })
+  const a = leg("A", [8000, 16000, 24000])
+  const b = leg("B", [9000, 15000, 23000])
+  const c = leg("C", [8500, 16500, 23500])
+  const ghost = sectorGhost([a, b, c])
+  assert.deepEqual(ghost.splitsMs, [8000, 14000, 21000], "the ideal lap: A's first sector, B's second, C's third")
+  assert.equal(ghost.timeMs, 21000)
+  const lap = (phase: LapView["phase"], timeMs: number, splitsMs: ReadonlyArray<number>): LapView => ({ phase, attempt: 1, timeMs, splitsMs, nextCheckpoint: 0 })
+  const at = (view: LapView) => {
+    const got = ghostAt(ghost, view)
+    return got === null ? null : { leg: got.leg.name, legMs: got.legMs, endMs: got.endMs }
+  }
+  assert.deepEqual(at(lap("ready", 0, [])), { leg: "A", legMs: 0, endMs: Number.POSITIVE_INFINITY })
+  assert.deepEqual(at(lap("running", 5000, [])), { leg: "A", legMs: 5000, endMs: Number.POSITIVE_INFINITY })
+  // The player crossed the first line at 8.5 s: B from its own first line, half a second on.
+  assert.deepEqual(at(lap("running", 9000, [8500])), { leg: "B", legMs: 9500, endMs: Number.POSITIVE_INFINITY })
+  // In the last sector C, whose lap ends as long after the player's second line as C's did after its own.
+  assert.deepEqual(at(lap("running", 16000, [8500, 15500])), { leg: "C", legMs: 17000, endMs: 15500 + (23500 - 16500) })
+  assert.deepEqual(at(lap("finished", 22000, [8500, 15500, 22000])), { leg: "C", legMs: 23000, endMs: 22500 })
+  // A plain lap is where it was at the same time on the clock.
+  assert.deepEqual(ghostAt(a, lap("running", 5000, [])), { leg: a, legMs: 5000, clockMs: 5000, endMs: 24000 })
+})
+
 test("a run of the board is watched without racing it: its own lap, its place, looping until stopped", async () => {
   const store = await memoryStore()
   const { app, run } = page(store, layerFake({ storage: null, latencyMs: 0 }))
@@ -276,7 +400,7 @@ test("a run of the board is watched without racing it: its own lap, its place, l
   assert.equal(await online.replay("no-such-run"), null)
 
   const rerun = createRerun(entry.data)
-  const watched = { runId: picked.runId, name: picked.name, rank: picked.rank, timeMs: picked.timeMs, mine: picked.mine }
+  const watched = { runId: picked.runId, name: picked.name, rank: picked.rank, timeMs: picked.timeMs, mine: picked.mine, sector: null }
   assert.ok(rerun.start(got.replay, watched))
   assert.deepEqual(rerun.watched(), watched)
   assert.equal(standingOf(rerun.watched()?.rank ?? null), "third", "the car wears the place of the run watched")
@@ -296,6 +420,32 @@ test("a run of the board is watched without racing it: its own lap, its place, l
   // The lap just driven, shown again, is no run of the board.
   assert.ok(rerun.start(got.replay))
   assert.equal(rerun.watched(), null)
+
+  // Watched from a board by sector: only that sector, from its line to the next, again and again.
+  const lap = runReplay(replayFromText(got.replay) ?? new Uint8Array())
+  assert.ok(lap.ok)
+  const second = (lap.splitsMs[1] ?? 0) - (lap.splitsMs[0] ?? 0)
+  assert.ok(rerun.start(got.replay, { ...watched, sector: 1 }))
+  const showings: Array<{ readonly startSplits: number; ticks: number; ended: boolean }> = []
+  let finished = false
+  for (let tick = 0; tick < 120 * 60 && showings.length < 4; tick++) {
+    for (const event of rerun.tick()) {
+      if (event.kind === "reset") showings.push({ startSplits: rerun.view().lap.splitsMs.length, ticks: 0, ended: false })
+      if (event.kind === "checkpoint" && event.index === 2) {
+        const now = showings[showings.length - 1]
+        if (now !== undefined) now.ended = true
+      }
+      if (event.kind === "finish") finished = true
+    }
+    const now = showings[showings.length - 1]
+    if (now !== undefined) now.ticks++
+  }
+  assert.equal(showings.length, 4, "it starts again and again")
+  assert.ok(showings.every((one) => one.startSplits === 1), "each time on the sector's line, the first one crossed")
+  assert.ok(showings.slice(0, 3).every((one) => one.ended), "each time to the line that ends it")
+  assert.equal(finished, false, "never on to the finish")
+  // As long as the sector, and a moment past its end.
+  for (const one of showings.slice(0, 3)) assert.ok(Math.abs(one.ticks - (second * 120) / 1000 - 72) < 4, `a showing of ${one.ticks} ticks`)
   await app.dispose()
 })
 
@@ -321,8 +471,8 @@ test("a run's splits against the run above, from both replays, the run above ask
   assert.ok(first !== undefined && second !== undefined && third !== undefined)
   const sum = (values: ReadonlyArray<number>): number => values.reduce((a, b) => a + b, 0)
 
-  assert.equal(splits.known(third, second), null, "nothing driven yet")
-  const given = await splits.load(third, second)
+  assert.equal(splits.known(third, second, null), null, "nothing driven yet")
+  const given = await splits.load(third, second, null)
   assert.ok(given !== null)
   assert.equal(given.above?.runId, second.runId)
   assert.equal(given.sectors.length, entry.data.checkpoints.length)
@@ -330,13 +480,13 @@ test("a run's splits against the run above, from both replays, the run above ask
   assert.ok(Math.abs(sum(given.sectors.map((one) => one.deltaMs ?? 0)) - (third.timeMs - second.timeMs)) < 1, "the gaps add up to the gap on the board")
   assert.ok(given.worst >= 0, "a slower run loses somewhere")
   assert.equal(given.sectors[given.worst]?.deltaMs, Math.max(...given.sectors.map((one) => one.deltaMs ?? 0)))
-  assert.deepEqual(splits.known(third, second), given, "once driven, drawn at once")
+  assert.deepEqual(splits.known(third, second, null), given, "once driven, drawn at once")
 
-  const asked = await splits.load(third, null)
+  const asked = await splits.load(third, null, null)
   assert.equal(asked?.above?.runId, second.runId, "the run above, asked of the board")
-  assert.deepEqual(splits.known(third, null), asked)
+  assert.deepEqual(splits.known(third, null, null), asked)
 
-  const fastest = await splits.load(first, null)
+  const fastest = await splits.load(first, null, null)
   assert.equal(fastest?.above, null)
   assert.ok(fastest?.sectors.every((one) => one.deltaMs === null))
   await app.dispose()

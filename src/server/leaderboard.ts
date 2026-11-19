@@ -6,9 +6,10 @@
  * and files `Math.floor` of the time that gives.
  */
 import { Effect } from "effect"
-import { pageMax, type Board, type BoardPage, type Entry, type Identity, type NameRefused, type NameTaken, type NotFound, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../api/contract.ts"
+import { pageMax, type Board, type BoardOrder, type BoardPage, type Entry, type Identity, type NameRefused, type NameTaken, type NotFound, type RunRefused, type RunReplay, type Submitted, type Unauthorised } from "../api/contract.ts"
 import { replayFromText, replayToText, rulesVersion, runReplay, trackById } from "../sim/index.ts"
 import { tidyName } from "../api/names.ts"
+import { sectorCount, wholeSectors } from "../api/sectors.ts"
 import { foldName, judgeName } from "./names.ts"
 import type { Sql, SqlError, Statement } from "./sql.ts"
 
@@ -34,6 +35,19 @@ interface RunRow {
   readonly time_ms: number
   readonly steering: "car" | "screen"
   readonly posted_at: number
+  /** JSON, whole ms each; null before the run's sectors were filed. */
+  readonly sectors_ms: string | null
+}
+
+/** A run's filed sectors, or none when they are not known. */
+const readSectors = (text: string | null): ReadonlyArray<number> | null => {
+  if (text === null) return null
+  try {
+    const value: unknown = JSON.parse(text)
+    return Array.isArray(value) && value.length > 0 && value.every((ms) => Number.isInteger(ms) && ms >= 0) ? (value as Array<number>) : null
+  } catch {
+    return null
+  }
 }
 
 // ── Randomness and hashing ─────────────────────────────────────────────
@@ -160,37 +174,60 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
 
   // ── Runs ─────────────────────────────────────────────────────────────
 
-  const runColumns = "r.id, r.player_id, p.name, r.time_ms, r.steering, r.posted_at"
-  /** The rank of run `r` on its board: the runs ahead of it, plus one. */
-  const rankColumn = `(SELECT COUNT(*) FROM runs o WHERE o.track = r.track AND o.rules = r.rules
-      AND (o.time_ms < r.time_ms OR (o.time_ms = r.time_ms AND (o.posted_at < r.posted_at OR (o.posted_at = r.posted_at AND o.id < r.id))))) + 1 AS rank`
-  const boardOrder = "ORDER BY r.time_ms, r.posted_at, r.id"
-  const fromBoard = "FROM runs r JOIN players p ON p.id = r.player_id WHERE r.track = ? AND r.rules = ?"
+  const runColumns = "r.id, r.player_id, p.name, r.time_ms, r.steering, r.posted_at, r.sectors_ms"
+  /**
+   * What a board in `order` ranks run `alias` by: its lap time, or one sector's time. `order`
+   * is a whole number checked against the track (`orderFor`), so it is safe in the query.
+   * A run whose sectors are not known has no sector time (NULL), and no place on that board.
+   */
+  const keyOf = (alias: string, order: BoardOrder): string => (order === null ? `${alias}.time_ms` : `json_extract(${alias}.sectors_ms, '$[${order}]')`)
+  /** The rank of run `r` on its board in `order`: the runs ahead of it, plus one. */
+  const rankColumn = (order: BoardOrder): string => {
+    const mine = keyOf("r", order)
+    const theirs = keyOf("o", order)
+    return `(SELECT COUNT(*) FROM runs o WHERE o.track = r.track AND o.rules = r.rules
+      AND (${theirs} < ${mine} OR (${theirs} = ${mine} AND (o.posted_at < r.posted_at OR (o.posted_at = r.posted_at AND o.id < r.id))))) + 1 AS rank`
+  }
+  const boardOrder = (order: BoardOrder): string => `ORDER BY ${keyOf("r", order)}, r.posted_at, r.id`
+  const fromBoard = (order: BoardOrder): string =>
+    `FROM runs r JOIN players p ON p.id = r.player_id WHERE r.track = ? AND r.rules = ?${order === null ? "" : ` AND ${keyOf("r", order)} IS NOT NULL`}`
 
-  const totalStatement = (track: string, rules: number): Statement => ({
-    query: "SELECT COUNT(*) AS total FROM runs WHERE track = ? AND rules = ?",
+  const totalStatement = (track: string, rules: number, order: BoardOrder = null): Statement => ({
+    query: `SELECT COUNT(*) AS total FROM runs r WHERE r.track = ? AND r.rules = ?${order === null ? "" : ` AND ${keyOf("r", order)} IS NOT NULL`}`,
     values: [track, rules]
   })
-  const pageStatement = (track: string, rules: number, offset: number, limit: number): Statement => ({
-    query: `SELECT ${runColumns} ${fromBoard} ${boardOrder} LIMIT ? OFFSET ?`,
+  const pageStatement = (track: string, rules: number, offset: number, limit: number, order: BoardOrder = null): Statement => ({
+    query: `SELECT ${runColumns} ${fromBoard(order)} ${boardOrder(order)} LIMIT ? OFFSET ?`,
     values: [track, rules, limit, offset]
   })
-  const myRunStatement = (track: string, rules: number, playerId: string): Statement => ({
-    query: `SELECT ${runColumns}, ${rankColumn} ${fromBoard} AND r.player_id = ?`,
+  const myRunStatement = (track: string, rules: number, playerId: string, order: BoardOrder = null): Statement => ({
+    query: `SELECT ${runColumns}, ${rankColumn(order)} ${fromBoard(order)} AND r.player_id = ?`,
     values: [track, rules, playerId]
   })
+
+  /** The order asked for, or `NotFound` for a track or a sector there is not. */
+  const boardFor = (track: string, order: BoardOrder): Effect.Effect<BoardOrder, NotFound> => {
+    const found = trackById(track)
+    if (found === undefined) return Effect.fail(notFound)
+    if (order === null) return Effect.succeed(null)
+    return Number.isInteger(order) && order >= 0 && order < sectorCount(found.data) ? Effect.succeed(order) : Effect.fail(notFound)
+  }
   const playerStatement = (id: string): Statement => ({ query: "SELECT id, name, secret_hash, banned_at FROM players WHERE id = ?", values: [id] })
 
   const totalOf = (rows: ReadonlyArray<unknown> | undefined): number => (rows?.[0] as { total: number } | undefined)?.total ?? 0
 
-  const entry = (row: RunRow, rank: number, viewerId: string | null): Entry => ({
-    rank,
-    runId: row.id,
-    name: row.name,
-    timeMs: row.time_ms,
-    steering: row.steering,
-    mine: row.player_id === viewerId
-  })
+  const entry = (row: RunRow, rank: number, viewerId: string | null): Entry => {
+    const sectorsMs = readSectors(row.sectors_ms)
+    return {
+      rank,
+      runId: row.id,
+      name: row.name,
+      timeMs: row.time_ms,
+      steering: row.steering,
+      mine: row.player_id === viewerId,
+      ...(sectorsMs === null ? {} : { sectorsMs })
+    }
+  }
 
   const submit = (player: Player, text: string): Effect.Effect<Submitted, RunRefused, R> =>
     Effect.gen(function* () {
@@ -201,16 +238,19 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
       if (!lap.ok) return yield* Effect.fail(runRefused(lap.fault))
       if (lap.rules !== rulesVersion) return yield* Effect.fail(runRefused("other-rules"))
       const timeMs = Math.floor(lap.timeMs)
+      const lapTrack = trackById(lap.track)
+      const sectors = wholeSectors(lap.splitsMs, lap.timeMs, lapTrack === undefined ? Math.max(1, lap.splitsMs.length) : sectorCount(lapTrack.data))
       // One statement, so two runs sent at once cannot both be kept: the faster one stays. An
       // equal time is not an improvement, so the run posted first keeps its place.
       const [stored, best, total] = yield* batch([
         {
-          query: `INSERT INTO runs (id, player_id, track, rules, time_ms, steering, replay, posted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          query: `INSERT INTO runs (id, player_id, track, rules, time_ms, steering, replay, posted_at, sectors_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (player_id, track, rules) DO UPDATE SET
-              id = excluded.id, time_ms = excluded.time_ms, steering = excluded.steering, replay = excluded.replay, posted_at = excluded.posted_at
+              id = excluded.id, time_ms = excluded.time_ms, steering = excluded.steering, replay = excluded.replay, posted_at = excluded.posted_at,
+              sectors_ms = excluded.sectors_ms
             WHERE excluded.time_ms < runs.time_ms
             RETURNING id`,
-          values: [newId(), player.id, lap.track, lap.rules, timeMs, lap.steering, replayToText(bytes), now()]
+          values: [newId(), player.id, lap.track, lap.rules, timeMs, lap.steering, replayToText(bytes), now(), JSON.stringify(sectors)]
         },
         myRunStatement(lap.track, lap.rules, player.id),
         totalStatement(lap.track, lap.rules)
@@ -231,15 +271,15 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
    * A board, seen by whoever `authorization` proves, or by nobody. One round trip: the
    * player's row and run are read with the board, and kept only if the secret matches.
    */
-  const board = (track: string, authorization: string | undefined): Effect.Effect<Board, NotFound, R> =>
+  const board = (track: string, authorization: string | undefined, asked: BoardOrder = null): Effect.Effect<Board, NotFound, R> =>
     Effect.gen(function* () {
-      if (trackById(track) === undefined) return yield* Effect.fail(notFound)
+      const order = yield* boardFor(track, asked)
       const rules = rulesVersion
       const claimed = readAuthorization(authorization)
       const [total, topRows, playerRows, mineRows] = yield* batch([
-        totalStatement(track, rules),
-        pageStatement(track, rules, 0, topCount),
-        ...(claimed === null ? [] : [playerStatement(claimed.id), myRunStatement(track, rules, claimed.id)])
+        totalStatement(track, rules, order),
+        pageStatement(track, rules, 0, topCount, order),
+        ...(claimed === null ? [] : [playerStatement(claimed.id), myRunStatement(track, rules, claimed.id, order)])
       ])
       const viewerId = claimed !== null && (yield* proves(playerRows?.[0], claimed.secret)) ? claimed.id : null
       const top = ((topRows ?? []) as ReadonlyArray<RunRow>).map((row, at) => entry(row, at + 1, viewerId))
@@ -250,7 +290,7 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
       if (mineRow.rank <= topCount) return { ...base, around: [], me }
       // The runs on each side of the player's, leaving out those `top` already shows.
       const from = Math.max(topCount, mineRow.rank - 1 - aroundCount)
-      const [rows = []] = yield* batch([pageStatement(track, rules, from, mineRow.rank + aroundCount - from)])
+      const [rows = []] = yield* batch([pageStatement(track, rules, from, mineRow.rank + aroundCount - from, order)])
       return { ...base, around: (rows as ReadonlyArray<RunRow>).map((row, at) => entry(row, from + at + 1, viewerId)), me }
     })
 
@@ -258,16 +298,16 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
    * Up to `count` runs of a board from rank `from` on, seen by whoever `authorization` proves.
    * `from` and `count` come from the request: `from` is at least 1 and `count` 1 to `pageMax`.
    */
-  const page = (track: string, from: number, count: number, authorization: string | undefined): Effect.Effect<BoardPage, NotFound, R> =>
+  const page = (track: string, from: number, count: number, authorization: string | undefined, asked: BoardOrder = null): Effect.Effect<BoardPage, NotFound, R> =>
     Effect.gen(function* () {
-      if (trackById(track) === undefined) return yield* Effect.fail(notFound)
+      const order = yield* boardFor(track, asked)
       const rules = rulesVersion
       const first = Number.isFinite(from) ? Math.max(1, Math.floor(from)) : 1
       const size = Number.isFinite(count) ? Math.max(1, Math.min(pageMax, Math.floor(count))) : pageMax
       const claimed = readAuthorization(authorization)
       const [total, rows, playerRows] = yield* batch([
-        totalStatement(track, rules),
-        pageStatement(track, rules, first - 1, size),
+        totalStatement(track, rules, order),
+        pageStatement(track, rules, first - 1, size, order),
         ...(claimed === null ? [] : [playerStatement(claimed.id)])
       ])
       const viewerId = claimed !== null && (yield* proves(playerRows?.[0], claimed.secret)) ? claimed.id : null
@@ -276,7 +316,7 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
     })
 
   const rivalStatement = (track: string, rules: number, fasterThanMs: number | null, except: string): Statement => ({
-    query: `SELECT ${runColumns}, ${rankColumn} ${fromBoard} AND r.player_id != ? ${fasterThanMs === null ? "" : "AND r.time_ms < ?"}
+    query: `SELECT ${runColumns}, ${rankColumn(null)} ${fromBoard(null)} AND r.player_id != ? ${fasterThanMs === null ? "" : "AND r.time_ms < ?"}
       ORDER BY r.time_ms DESC, r.posted_at DESC, r.id DESC LIMIT 1`,
     values: fasterThanMs === null ? [track, rules, except] : [track, rules, except, fasterThanMs]
   })
@@ -309,6 +349,31 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
     })
 
   // ── Admin ────────────────────────────────────────────────────────────
+
+  /**
+   * Files the sectors of up to `limit` runs filed before the server kept them, by driving their
+   * replays again (some tens of milliseconds each). A replay that no longer drives is filed with
+   * none (`[]`), so it is not tried again. Only runs under these rules: an older rules' lap
+   * would not drive the same. `left` is how many still wait.
+   */
+  const adminFillSectors = (limit: number): Effect.Effect<{ readonly filled: number; readonly failed: number; readonly left: number }, never, R> =>
+    Effect.gen(function* () {
+      const rows = yield* all<{ id: string; track: string; time_ms: number; replay: string }>(
+        "SELECT id, track, time_ms, replay FROM runs WHERE sectors_ms IS NULL AND rules = ? LIMIT ?",
+        [rulesVersion, limit]
+      )
+      let failed = 0
+      const updates = rows.map((row): Statement => {
+        const found = trackById(row.track)
+        const bytes = replayFromText(row.replay)
+        const lap = found === undefined || bytes === null ? null : runReplay(bytes, { ghost: false })
+        const sectors = found !== undefined && lap !== null && lap.ok ? wholeSectors(lap.splitsMs, row.time_ms, sectorCount(found.data)) : []
+        if (sectors.length === 0) failed++
+        return { query: "UPDATE runs SET sectors_ms = ? WHERE id = ? AND sectors_ms IS NULL", values: [JSON.stringify(sectors), row.id] }
+      })
+      const results = yield* batch([...updates, { query: "SELECT COUNT(*) AS total FROM runs WHERE sectors_ms IS NULL AND rules = ?", values: [rulesVersion] }])
+      return { filled: rows.length - failed, failed, left: totalOf(results[results.length - 1]) }
+    })
 
   const adminPlayers = (search: string, limit: number) =>
     all<{ id: string; name: string; created_at: number; banned_at: number | null; runs: number }>(
@@ -353,6 +418,7 @@ export const makeLeaderboard = <R>(sql: Sql<R>, options: LeaderboardOptions = {}
     replay,
     adminPlayers,
     adminRuns,
+    adminFillSectors,
     adminRename,
     adminRemoveRun,
     adminBan

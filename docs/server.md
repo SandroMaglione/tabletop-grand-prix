@@ -95,9 +95,10 @@ page in progress on 2026-11-15, which already reads `VITE_API_URL`. Deploying ag
 | `PUT /players/me/name {name}` | `rename` | signed in |
 | `POST /runs {replay}` | `submit` | signed in |
 | `GET /runs/:runId` | `replay` | |
-| `GET /boards/:track` | `board` | signed in or not |
+| `GET /boards/:track?sector=` | `board` | signed in or not; `sector` (0 is the first) orders it by that sector |
+| `GET /boards/:track/runs?from=&count=&sector=` | `page` | signed in or not |
 | `GET /boards/:track/rival?fasterThanMs=` | `rival` | signed in or not |
-| `GET /admin/players?search=&limit=`, `GET /admin/boards/:track/:rules`, `PUT /admin/players/:id/name`, `DELETE /admin/runs/:runId`, `POST /admin/players/:id/ban` | admin | `Authorization: Bearer <ADMIN_SECRET>` |
+| `GET /admin/players?search=&limit=`, `GET /admin/boards/:track/:rules`, `PUT /admin/players/:id/name`, `DELETE /admin/runs/:runId`, `POST /admin/players/:id/ban`, `POST /admin/sectors?limit=` | admin | `Authorization: Bearer <ADMIN_SECRET>` |
 
 A player signs a request with `Authorization: Bearer <id>.<secret>`. The secret is 32 random bytes,
 and the server keeps only its SHA-256. A header that does not prove a player is `Unauthorised` on
@@ -120,6 +121,15 @@ the two only differ in the Worker name. The site's own domain in `prod` is allow
 - Ranking orders by time, then by when the run was posted, so ties go to whoever posted first.
 - `board`: the top 10, `total`, and `me`. `around` is the player's run with two runs on each
   side, minus any already in `top`: rank 15 gives 13–17, and rank 11 gives 11–13.
+- Each run is filed with its sectors (`sectors_ms`, JSON): whole milliseconds that add up to its
+  `time_ms` (`wholeSectors` in `src/api/sectors.ts`), and every board line carries them as
+  `sectorsMs`. `board` and `page` with `sector` rank the runs by that sector alone, ties to whoever
+  posted first; only runs whose sectors are known are on such a board, and its `total` and `me`
+  are of it. A sector the track has not is `NotFound`.
+- Runs filed before migration `0002_sectors` have no sectors until `pnpm admin <stage> fill-sectors`
+  drives their replays again (`POST /admin/sectors`, up to 50 a request, 10 by default; the script
+  asks for 20 at a time until none is left). Run it once after deploying. A replay that no longer
+  drives is filed with `[]` and stays off the sector boards.
 - `rival`: the slowest run strictly faster than `fasterThanMs` that is not the asker's, or the
   slowest run on the board when `fasterThanMs` is null. Null when nobody is ahead.
 - Replays over 64 KB of text are refused with `too-large` before anything is decoded. A

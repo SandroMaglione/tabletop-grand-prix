@@ -1,6 +1,6 @@
 /**
  * The leaderboard, as the page lives with it: the player's name, sending a best lap, the
- * board of the track being driven, and which ghost to race.
+ * board of the track being driven (by the lap, or by one sector), and which ghosts to race.
  *
  * It talks to the server only through the `Leaderboard` service and keeps what it learns in
  * plain fields the page reads while it draws. Nothing here throws or waits in the game
@@ -18,10 +18,10 @@
  * server has answered for it. The outbox is sent again after every finish and on every visit.
  */
 import { Effect, Result } from "effect"
-import { type Board, type BoardPage, type Entry, type Identity, Leaderboard, type LeaderboardShape, type NameRefused, type RunReplay, type Submitted, type Unavailable } from "../api/contract.ts"
+import { type Board, type BoardOrder, type BoardPage, type Entry, type Identity, Leaderboard, type LeaderboardShape, type NameRefused, type RunReplay, type Submitted, type Unavailable } from "../api/contract.ts"
 import { tidyName } from "../api/names.ts"
 import { Bests, type GhostChoice, Outbox, Rivals, type SavedRival } from "./boards.ts"
-import { ghostFromReplay, type Ghost, type LapGhost } from "./ghost.ts"
+import { ghostFromReplay, sectorGhost, type Ghost, type LapGhost } from "./ghost.ts"
 import type { FieldRun } from "./field.ts"
 import { makeHandle } from "./handles.ts"
 import type { FinishResult, Laps } from "./laps.ts"
@@ -58,16 +58,25 @@ export interface OnlineState {
   /** Whether the last request reached the server; null before any. */
   readonly reachable: boolean | null
   readonly identity: Identity | null
+  /** The board by lap: the player's place on it, and the runs near it. */
   readonly board: Board | null
+  /** How the board is shown: by the lap (null), or by one sector (0 is the first). */
+  readonly order: BoardOrder
+  /** The board as it is shown, in `order` (the lap board itself when by lap); null until read. */
+  readonly shown: Board | null
   readonly boardLoading: boolean
   /** What became of the last best lap, and the attempt it was driven in. */
   readonly post: { readonly attempt: number; readonly state: PostState } | null
   /** The player's place on this board, from the last board or the last run sent. */
   readonly rank: { readonly rank: number; readonly total: number } | null
   readonly choice: GhostChoice
-  /** How many ghosts to race, the raced one included: 1, 5 or 10. */
-  readonly field: number
-  /** The runs of the board raced beside the ghost, in the order of their tints (`fieldTint`). */
+  /** The runs of the board raced as the ghost: the next closest or the fastest, or each sector's driver. */
+  readonly raced: ReadonlyArray<string>
+  /** Racing by sector: each sector's driver as found (the fastest there, unless one was picked), null where none is. Empty otherwise. */
+  readonly legs: ReadonlyArray<{ readonly runId: string; readonly name: string } | null>
+  /** The runs the player added from the board, in the order added (`maxPicked` at most). */
+  readonly picked: ReadonlyArray<string>
+  /** The runs of the board raced beside the ghost, in the order of their tints (`fieldTint`): the picked ones whose laps are in, less the raced. */
   readonly fieldRuns: ReadonlyArray<string>
   /** A ghost is being fetched or driven. */
   readonly ghostLoading: boolean
@@ -84,13 +93,23 @@ export interface Online {
   /** After every finished lap. */
   finished(result: FinishResult): void
   refreshBoard(): void
-  /** Up to `count` runs of this track's board from rank `from` on, for reading all of it; null when it cannot be had. */
-  page(from: number, count: number): Promise<BoardPage | null>
+  /** Up to `count` runs of this track's board in `order` from rank `from` on, for reading all of it; null when it cannot be had. */
+  page(from: number, count: number, order: BoardOrder): Promise<BoardPage | null>
+  /** Races the ghost `choice` asks for, and only it: the runs added go (OFF races nothing at all). Kept. */
   choose(choice: GhostChoice): void
+  /** Shows the board by the lap (null) or by one sector; the `fastest` ghost follows it. Kept with the choice. */
+  setOrder(order: BoardOrder): void
+  /**
+   * A click on a run of the board: races its ghost too, or stops racing it when it races
+   * (added, or as the ghost the choice found: then no ghost is chosen, and the runs added stay). Kept.
+   */
+  toggle(entry: Entry): void
+  /** Takes away every run added. */
+  clearPicked(): void
+  /** Races by sector, with `runId` (null: the fastest there) as the driver of `sector`. */
+  setLeg(sector: number, runId: string | null): void
   /** A run's replay, to watch it; null when it cannot be had. */
   replay(runId: string): Promise<RunReplay | null>
-  /** How many ghosts to race (`fieldSizes`). */
-  setField(count: number): void
   /** Whether a name could be taken now (it is not saved). */
   checkName(name: string): Promise<NameAnswer>
   /** Registers the name, or renames the player who has one. */
@@ -112,8 +131,8 @@ export interface OnlineOptions {
   /** Makes up a name for a new player. `makeHandle` unless a test wants to know it. */
   readonly handle?: () => string
   readonly rival: SavedRival
-  /** How many ghosts to race, the raced one included (`fieldSizes`). */
-  readonly field?: number
+  /** How many sectors the track's lap has (`sectorCount`): the orders the board can be shown in. */
+  readonly sectors?: number
   /** Gets the runs to race beside the ghost, whenever they change (`Field.set`). */
   readonly raceField?: (runs: ReadonlyArray<FieldRun>) => void
   /** Every track id, to send what waits on each. */
@@ -124,8 +143,8 @@ export interface OnlineOptions {
   readonly timeoutMs?: number
 }
 
-/** The choices of how many ghosts to race. */
-export const fieldSizes = [1, 5, 10] as const
+/** The most runs the player may add beside the ghost. */
+export const maxPicked = 20
 
 const unavailable: Unavailable = { _tag: "Unavailable" }
 
@@ -159,6 +178,11 @@ export const createOnline = (options: OnlineOptions): Online => {
   let identity = options.identity
   let asked = options.asked
   let board: Board | null = null
+  const sectors = Math.max(1, Math.floor(options.sectors ?? 1))
+  const validOrder = (asked: BoardOrder): BoardOrder => (asked !== null && Number.isInteger(asked) && asked >= 0 && asked < sectors ? asked : null)
+  let order: BoardOrder = validOrder(options.rival.order)
+  /** The board by one sector, with the sector it is of, so it is never shown as another's. */
+  let sectorBoard: { readonly order: number; readonly board: Board } | null = null
   let boardLoading = false
   let post: OnlineState["post"] = null
   let submitted: Submitted | null = null
@@ -166,11 +190,12 @@ export const createOnline = (options: OnlineOptions): Online => {
   /** The last rival's run, kept for offline. */
   let rivalRun: RunReplay | null = options.rival.run
   let ghostLoading = false
-  let field = fieldSizes.includes(options.field as 1) ? (options.field as number) : 1
+  let picked: ReadonlyArray<string> = options.rival.picked.slice(0, maxPicked)
+  let legs: OnlineState["legs"] = []
   let fieldRuns: ReadonlyArray<string> = []
   /** The field last asked for (its run ids), so a change asks once. */
   let fieldWanted = ""
-  /** Replays of the board's runs fetched for the field, by run id. */
+  /** Replays of the board's runs fetched this visit, by run id. */
   const fetched = new Map<string, RunReplay>()
   let namePrompts = 0
   /** A made-up name is being registered: the lap waits for that, not for the player. */
@@ -195,6 +220,26 @@ export const createOnline = (options: OnlineOptions): Online => {
 
   const reached = (result: Result.Result<unknown, { readonly _tag: string }>): void => {
     reachable = Result.isSuccess(result) || result.failure._tag !== "Unavailable"
+  }
+
+  /** A run's replay, fetched once a visit; undefined when it cannot be had. */
+  const replayOf = async (runId: string): Promise<RunReplay | undefined> => {
+    if (rivalRun !== null && rivalRun.runId === runId) return rivalRun
+    const known = fetched.get(runId)
+    if (known !== undefined) return known
+    const got = await run(ask(timeoutMs, (lb) => lb.replay(runId)))
+    if (got !== undefined) reached(got)
+    if (got === undefined || Result.isFailure(got)) return undefined
+    fetched.set(runId, got.success)
+    return got.success
+  }
+
+  /** The fastest run of the board in `by` that is not the player's own (of the first two, one is not); null for none, undefined when it cannot be had. */
+  const fastestIn = async (by: BoardOrder): Promise<Entry | null | undefined> => {
+    const got = await run(ask(timeoutMs, (lb) => lb.page(track, 1, 2, identity, by)))
+    if (got !== undefined) reached(got)
+    if (got === undefined || Result.isFailure(got)) return undefined
+    return got.success.entries.find((one) => !one.mine) ?? null
   }
 
   // ── the ghost ──────────────────────────────────────────────────────────
@@ -227,15 +272,19 @@ export const createOnline = (options: OnlineOptions): Online => {
   }
 
   const keepRival = (): void => {
-    void run(Rivals.use((rivals) => rivals.set(track, rules, { version: 1, choice, run: rivalRun })))
+    void run(Rivals.use((rivals) => rivals.set(track, rules, { version: 2, choice, order, picked, run: rivalRun })))
   }
 
   /** Shows the ghost the device can show without asking anyone. */
   const showLocal = (): void => {
     if (choice.kind === "none") ghost.set(null)
     else if (choice.kind === "own" || !enabled) ghost.set(ownGhost())
-    else if (choice.kind === "run") ghost.set(rivalRun !== null && rivalRun.runId === choice.runId ? rivalGhost(rivalRun) ?? ownGhost() : ownGhost())
-    else ghost.set(stillAhead(rivalRun) ? rivalGhost(rivalRun) ?? ownGhost() : ownGhost())
+    // The fastest found last time, until the board says who it is now.
+    else if (choice.kind === "fastest") ghost.set(rivalRun !== null ? rivalGhost(rivalRun) ?? ownGhost() : ownGhost())
+    // By sector: the drivers raced until now stay until the new ones are in.
+    else if (choice.kind === "sectors") {
+      if (ghost.current()?.kind !== "sectors") ghost.set(ownGhost())
+    } else ghost.set(stillAhead(rivalRun) ? rivalGhost(rivalRun) ?? ownGhost() : ownGhost())
   }
 
   /** Drives `found` again (out of the tick) and races it, unless a newer choice came meanwhile. */
@@ -252,11 +301,9 @@ export const createOnline = (options: OnlineOptions): Online => {
   }
 
   const fetchRun = async (request: number, runId: string): Promise<void> => {
-    if (rivalRun !== null && rivalRun.runId === runId) return race(request, rivalRun)
-    const got = await run(ask(timeoutMs, (lb) => lb.replay(runId)))
+    const got = await replayOf(runId)
     if (request !== ghostRequest) return
-    if (got !== undefined) reached(got)
-    if (got !== undefined && Result.isSuccess(got)) return race(request, got.success)
+    if (got !== undefined) return race(request, got)
     // Gone or unreachable: the device's own best stands in.
     ghostLoading = false
     defer(() => {
@@ -265,9 +312,29 @@ export const createOnline = (options: OnlineOptions): Online => {
     changed()
   }
 
+  /**
+   * Races one driver per sector: the one picked for it, or the fastest there. A sector whose
+   * driver cannot be had is driven by the player's own best; without one, the own best races alone.
+   */
+  const raceBySector = async (request: number, asked: ReadonlyArray<string | null>): Promise<void> => {
+    const ids = await Promise.all(Array.from({ length: sectors }, async (_, i) => asked[i] ?? (await fastestIn(i))?.runId ?? null))
+    const replays = await Promise.all(ids.map((id) => (id === null ? Promise.resolve(undefined) : replayOf(id))))
+    if (request !== ghostRequest) return
+    defer(() => {
+      if (request !== ghostRequest) return
+      const own = ownGhost()
+      const made = replays.map((one) => (one === undefined ? null : rivalGhost(one)) ?? own)
+      legs = replays.map((one) => (one === undefined ? null : { runId: one.runId, name: one.name }))
+      ghost.set(made.every((leg): leg is LapGhost => leg !== null) ? sectorGhost(made) : own)
+      ghostLoading = false
+      changed()
+    })
+  }
+
   /** Finds the ghost the choice asks for, asking the server when it must. */
   const resolveGhost = (): void => {
     const request = ++ghostRequest
+    if (choice.kind !== "sectors") legs = []
     defer(() => {
       if (request !== ghostRequest) return
       showLocal()
@@ -281,8 +348,22 @@ export const createOnline = (options: OnlineOptions): Online => {
     }
     ghostLoading = true
     changed()
-    if (choice.kind === "run") {
-      void fetchRun(request, choice.runId)
+    if (choice.kind === "sectors") {
+      void raceBySector(request, choice.runs)
+      return
+    }
+    if (choice.kind === "fastest") {
+      void fastestIn(order).then((entry) => {
+        if (request !== ghostRequest) return
+        if (entry === undefined) {
+          // Unreachable: the last fastest kept (or the own best), already shown.
+          ghostLoading = false
+          changed()
+          return
+        }
+        if (entry === null) return nobodyAhead(request)
+        void fetchRun(request, entry.runId)
+      })
       return
     }
     const best = laps.best()
@@ -296,53 +377,48 @@ export const createOnline = (options: OnlineOptions): Online => {
         return
       }
       const entry: Entry | null = got.success
-      if (entry === null) {
-        // Nobody is ahead: the player's own best is the one to beat.
-        rivalRun = null
-        keepRival()
-        ghostLoading = false
-        defer(() => {
-          if (request === ghostRequest) ghost.set(ownGhost())
-        })
-        changed()
-        return
-      }
+      if (entry === null) return nobodyAhead(request)
       void fetchRun(request, entry.runId)
     })
   }
 
+  /** Nobody else is there to race: the player's own best is the one to beat. */
+  const nobodyAhead = (request: number): void => {
+    rivalRun = null
+    keepRival()
+    ghostLoading = false
+    defer(() => {
+      if (request === ghostRequest) ghost.set(ownGhost())
+    })
+    changed()
+  }
+
   // ── the field ──────────────────────────────────────────────────────────
 
-  /**
-   * The runs to race beside the ghost: the board's runs just ahead of the player's best (all
-   * of them are, without one), nearest first, then the ones just behind; never the player's
-   * own nor the raced ghost's. Their replays are fetched, then handed on.
-   */
+  /** The board as it is shown: by the lap, or the board of the sector it is shown by (null until read). */
+  const shownBoard = (): Board | null => (order === null ? board : sectorBoard !== null && sectorBoard.order === order ? sectorBoard.board : null)
+
+  /** The runs of the board raced as the ghost now (or about to be): none for the player's own. */
+  const racedRuns = (): ReadonlyArray<string> => {
+    const current = ghost.current()
+    if (current === null) return []
+    const runs = current.kind === "sectors" ? current.legs.map((leg) => leg.runId) : [current.runId]
+    return runs.filter((runId): runId is string => runId !== null)
+  }
+
+  /** The runs of the board raced as the ghost the choice found: the next closest or the fastest, or each sector's driver. */
+  const racedNow = (): ReadonlyArray<string> =>
+    choice.kind === "sectors" ? legs.flatMap((leg) => (leg === null ? [] : [leg.runId])) : choice.kind === "next" || choice.kind === "fastest" ? racedRuns() : []
+
+  /** The runs the player added, less any raced as the ghost: their replays are fetched, then handed on. */
   const pickField = (): void => {
-    const raced = ghost.current()?.runId ?? null
-    const best = laps.best()?.timeMs ?? Number.POSITIVE_INFINITY
-    const seen = new Set<string>()
-    const entries = board === null || !enabled || choice.kind === "none" ? [] : [...board.top, ...board.around].filter((entry) => {
-      if (entry.mine || entry.runId === raced || seen.has(entry.runId)) return false
-      seen.add(entry.runId)
-      return true
-    })
-    const ahead = entries.filter((entry) => entry.timeMs < best).sort((a, b) => b.timeMs - a.timeMs)
-    const behind = entries.filter((entry) => entry.timeMs >= best).sort((a, b) => a.timeMs - b.timeMs)
-    const picked = [...ahead, ...behind].slice(0, field - 1)
-    const wanted = picked.map((entry) => entry.runId).join(" ")
-    if (wanted === fieldWanted) return
-    fieldWanted = wanted
-    void Promise.all(
-      picked.map(async (entry) => {
-        if (!fetched.has(entry.runId)) {
-          const got = await run(ask(timeoutMs, (lb) => lb.replay(entry.runId)))
-          if (got !== undefined && Result.isSuccess(got)) fetched.set(entry.runId, got.success)
-        }
-        return fetched.get(entry.runId)
-      })
-    ).then((found) => {
-      if (wanted !== fieldWanted) return
+    const raced = new Set(racedRuns())
+    const wanted = enabled ? picked.filter((runId) => !raced.has(runId)) : []
+    const key = wanted.join(" ")
+    if (key === fieldWanted) return
+    fieldWanted = key
+    void Promise.all(wanted.map(replayOf)).then((found) => {
+      if (key !== fieldWanted) return
       const runs = found.filter((one): one is RunReplay => one !== undefined)
       fieldRuns = runs.map((one) => one.runId)
       options.raceField?.(runs.map((one) => ({ key: one.runId, name: one.name, replay: one.replay })))
@@ -352,17 +428,25 @@ export const createOnline = (options: OnlineOptions): Online => {
 
   // ── the board ──────────────────────────────────────────────────────────
 
+  /** The board of the track in `by`: an empty one when there is none yet, undefined when it cannot be had. */
+  const readBoard = async (by: BoardOrder): Promise<Board | undefined> => {
+    const got = await run(ask(timeoutMs, (lb) => lb.board(track, identity, by)))
+    if (got === undefined) return undefined
+    reached(got)
+    if (Result.isSuccess(got)) return got.success
+    return got.failure._tag === "NotFound" ? { track, rules, total: 0, top: [], around: [], me: null } : undefined
+  }
+
+  /** Reads the board by lap, and by the sector it is shown by. */
   const refreshBoard = (): void => {
     if (!enabled) return
     boardLoading = true
     changed()
-    void run(ask(timeoutMs, (lb) => lb.board(track, identity))).then((got) => {
+    const asked = order
+    void Promise.all([readBoard(null), asked === null ? Promise.resolve(undefined) : readBoard(asked)]).then(([byLap, bySector]) => {
       boardLoading = false
-      if (got !== undefined) {
-        reached(got)
-        if (Result.isSuccess(got)) board = got.success
-        else if (got.failure._tag === "NotFound") board = { track, rules, total: 0, top: [], around: [], me: null }
-      }
+      if (byLap !== undefined) board = byLap
+      if (asked !== null && bySector !== undefined) sectorBoard = { order: asked, board: bySector }
       changed()
     })
   }
@@ -480,7 +564,8 @@ export const createOnline = (options: OnlineOptions): Online => {
       if (snapshot !== null) return snapshot
       const me = board?.me ?? null
       const rank = submitted !== null ? { rank: submitted.rank, total: submitted.total } : me !== null && board !== null ? { rank: me.rank, total: board.total } : null
-      snapshot = { enabled, reachable, identity, board, boardLoading, post, rank, choice, field, fieldRuns, ghostLoading, namePrompts }
+      const raced = racedNow()
+      snapshot = { enabled, reachable, identity, board, order, shown: shownBoard(), boardLoading, post, rank, choice, raced, legs, picked, fieldRuns, ghostLoading, namePrompts }
       return snapshot
     },
     subscribe(listener) {
@@ -503,7 +588,7 @@ export const createOnline = (options: OnlineOptions): Online => {
       if (result.improved && best !== null) {
         void run(Bests.use((bests) => bests.set(track, rules, best)))
         // The new best is the ghost when the player races their own (or nobody is ahead).
-        if (!enabled || choice.kind === "own" || (choice.kind === "next" && !stillAhead(rivalRun))) {
+        if (!enabled || choice.kind === "own" || (choice.kind === "next" && !stillAhead(rivalRun)) || (choice.kind === "fastest" && rivalRun === null)) {
           defer(() => {
             if (choice.kind !== "none") ghost.set(ownGhost())
           })
@@ -523,9 +608,9 @@ export const createOnline = (options: OnlineOptions): Online => {
         })
     },
     refreshBoard,
-    async page(from, count) {
+    async page(from, count, by) {
       if (!enabled) return null
-      const got = await run(ask(timeoutMs, (lb) => lb.page(track, from, count, identity)))
+      const got = await run(ask(timeoutMs, (lb) => lb.page(track, from, count, identity, by)))
       if (got === undefined) return null
       reached(got)
       if (Result.isSuccess(got)) return got.success
@@ -539,14 +624,51 @@ export const createOnline = (options: OnlineOptions): Online => {
       reached(got)
       return Result.isSuccess(got) ? got.success : null
     },
-    setField(count) {
-      field = fieldSizes.includes(count as 1) ? count : 1
+    toggle(entry) {
+      const { runId } = entry
+      const raced = (entry.mine && choice.kind === "own") || racedNow().includes(runId)
+      if (raced || picked.includes(runId)) {
+        picked = picked.filter((one) => one !== runId)
+        if (!raced) {
+          keepRival()
+          return changed()
+        }
+        choice = { kind: "none" }
+        keepRival()
+        return resolveGhost()
+      }
+      picked = [...picked, runId].slice(-maxPicked)
+      keepRival()
       changed()
+    },
+    clearPicked() {
+      picked = []
+      keepRival()
+      changed()
+    },
+    setLeg(sector, runId) {
+      if (!Number.isInteger(sector) || sector < 0 || sector >= sectors) return
+      const runs = Array.from({ length: sectors }, (_, i) => (choice.kind === "sectors" ? choice.runs[i] ?? null : null))
+      runs[sector] = runId
+      choice = { kind: "sectors", runs }
+      keepRival()
+      resolveGhost()
     },
     choose(next) {
       choice = next
+      picked = []
       keepRival()
       resolveGhost()
+    },
+    setOrder(next) {
+      const valid = validOrder(next)
+      if (valid === order) return
+      order = valid
+      keepRival()
+      // The fastest ghost is the fastest in the order shown.
+      if (choice.kind === "fastest") resolveGhost()
+      if (enabled) refreshBoard()
+      else changed()
     },
     async checkName(name) {
       if (!enabled) return { kind: "unavailable" }

@@ -4,8 +4,13 @@
  *
  * A new ghost chosen while a lap runs waits for the lap to end, so a lap is raced against
  * one ghost from start to finish.
+ *
+ * A ghost by sector (`SectorGhost`) is one lap per sector: in each sector it is that sector's
+ * driver, and each time the player crosses a line it becomes the next one's, from that line
+ * at that moment. So every sector is raced from level against the driver picked for it.
  */
-import { ghostStride, replayFromText, runReplay, type RaceView } from "../sim/index.ts"
+import { sectorTimes } from "../api/sectors.ts"
+import { ghostStride, replayFromText, runReplay, type LapView, type RaceView } from "../sim/index.ts"
 import type { GhostPose } from "./contract.ts"
 
 /** A lap to race against: the player's own best, or another player's run. */
@@ -19,6 +24,56 @@ export interface LapGhost {
   readonly splitsMs: ReadonlyArray<number>
   /** One pose every few ticks, flat, `ghostStride` numbers each: elapsed ms, x, y, z, yaw, pitch, roll. */
   readonly poses: ReadonlyArray<number>
+}
+
+/**
+ * A ghost by sector: `legs[i]` drives sector `i`. Its time and splits are the ideal lap of
+ * the legs (each one's own sector, added up), so the gap at each line is the player's against it.
+ */
+export interface SectorGhost {
+  readonly kind: "sectors"
+  readonly name: string
+  readonly runId: null
+  readonly timeMs: number
+  readonly splitsMs: ReadonlyArray<number>
+  readonly legs: ReadonlyArray<LapGhost>
+}
+
+/** What the player races: one lap, or one per sector. */
+export type RaceGhost = LapGhost | SectorGhost
+
+/** The ghost by sector made of `legs`, one per sector in order. */
+export const sectorGhost = (legs: ReadonlyArray<LapGhost>): SectorGhost => {
+  const own = legs.map((leg, i) => sectorTimes(leg.splitsMs, leg.timeMs, legs.length)[i] ?? 0)
+  const splitsMs = own.map((_, i) => own.slice(0, i + 1).reduce((a, b) => a + b, 0))
+  return { kind: "sectors", name: "BY SECTOR", runId: null, timeMs: splitsMs[splitsMs.length - 1] ?? 0, splitsMs, legs }
+}
+
+/** Where a ghost is at this point of the player's lap: which lap it drives, at what time on that lap's clock, and when (on the player's clock) its lap ends. */
+export interface GhostAt {
+  readonly leg: LapGhost
+  readonly legMs: number
+  readonly clockMs: number
+  readonly endMs: number
+}
+
+/**
+ * Where `ghost` is at this point of the player's lap. While ready it waits on the start line;
+ * while running and finished it is where its lap was at the same time on the clock. A ghost
+ * by sector drives the leg of the sector the player is in, from the line the player crossed
+ * last, as long after its own crossing as the player is after theirs.
+ */
+export const ghostAt = (ghost: RaceGhost, lap: LapView): GhostAt | null => {
+  const clockMs = lap.phase === "ready" ? 0 : lap.timeMs
+  if (ghost.kind !== "sectors") return { leg: ghost, legMs: clockMs, clockMs, endMs: ghost.timeMs }
+  const last = ghost.legs.length - 1
+  const sector = lap.phase === "ready" ? 0 : Math.min(lap.splitsMs.length, last)
+  const leg = ghost.legs[sector]
+  if (leg === undefined) return null
+  if (sector === 0) return { leg, legMs: clockMs, clockMs, endMs: last === 0 ? leg.timeMs : Number.POSITIVE_INFINITY }
+  const mine = lap.splitsMs[sector - 1] ?? 0
+  const theirs = leg.splitsMs[sector - 1] ?? mine
+  return { leg, legMs: theirs + (clockMs - mine), clockMs, endMs: sector === last ? mine + (leg.timeMs - theirs) : Number.POSITIVE_INFINITY }
 }
 
 /**
@@ -93,14 +148,16 @@ export interface Ghost {
    */
   pose(view: RaceView, racing: boolean): GhostPose | null
   /** The ghost being raced (or the one about to be, between laps). */
-  current(): LapGhost | null
+  current(): RaceGhost | null
+  /** The lap the ghost drives at this point of `view`'s lap (a ghost by sector changes at each line), or null with none. */
+  leg(view: RaceView): LapGhost | null
   /** Race against `ghost` from the next lap on (at once when no lap runs). */
-  set(ghost: LapGhost | null): void
+  set(ghost: RaceGhost | null): void
 }
 
 export const createGhost = (): Ghost => {
-  let current: LapGhost | null = null
-  let waiting: { readonly ghost: LapGhost | null } | null = null
+  let current: RaceGhost | null = null
+  let waiting: { readonly ghost: RaceGhost | null } | null = null
   let running = false
   return {
     pose(view, racing) {
@@ -110,13 +167,12 @@ export const createGhost = (): Ghost => {
         waiting = null
       }
       if (current === null) return null
-      // While ready the ghost waits on the start line; while running and finished it is
-      // where its lap was at the same time on the clock.
-      const timeMs = view.lap.phase === "ready" ? 0 : view.lap.timeMs
-      const pose = poseAt(current.poses, timeMs)
-      return pose === null ? null : { ...pose, fade: ghostFade(pose, view.car, timeMs, current.timeMs) }
+      const at = ghostAt(current, view.lap)
+      const pose = at === null ? null : poseAt(at.leg.poses, at.legMs)
+      return pose === null || at === null ? null : { ...pose, fade: ghostFade(pose, view.car, at.clockMs, at.endMs) }
     },
     current: () => (waiting !== null && !running ? waiting.ghost : current),
+    leg: (view) => (current === null ? null : ghostAt(current, view.lap)?.leg ?? null),
     set(ghost) {
       if (running) waiting = { ghost }
       else {

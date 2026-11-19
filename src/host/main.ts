@@ -21,7 +21,7 @@
  * window and behind it the page cuts to that replay, driven again in a second session
  * (`rerun.ts`): the actors, the scene and the engine sound follow it, the board opens beside
  * it, and the live car waits out of sight until the player starts again. The same picture
- * shows a run picked from the board with its ▶ (`watchRun`): that driver's lap, their car
+ * shows a run picked from the board with its ▶ (`watchRun`; from a board by sector, only that sector, looping): that driver's lap, their car
  * painted for their place, with no ghost beside it and the board folded away, until the
  * player starts again (`R`) or picks another run. From the second lap of a visit, the replay
  * of the player's own lap carries the email sign-up in the timing panel's place (`signup.ts`). What the page keeps (settings, name, best lap,
@@ -34,18 +34,19 @@
 import { Clock, FixedLoop, Result } from "@typeonce/ritmo"
 import { BrowserTickSource, BrowserVisibility } from "@typeonce/ritmo-browser"
 import { Effect, Layer, ManagedRuntime } from "effect"
-import type { Entry, Leaderboard } from "../api/contract.ts"
+import type { BoardOrder, Entry, Leaderboard } from "../api/contract.ts"
 import { layerHttp } from "../api/http.ts"
+import { sectorCount } from "../api/sectors.ts"
 import { createSession, idleInput, quantise, rulesVersion, track as firstTrack, trackById, tracks, type DriveInput, type RaceEvent, type RaceSession, type RaceView, type Steering, type TrackData } from "../sim/index.ts"
 import { createActors } from "./actors/index.ts"
 import { createAudio } from "./audio.ts"
 import { chooseBackend } from "./backend.ts"
-import { Bests, boardsLayer, Rivals } from "./boards.ts"
+import { Bests, boardsLayer, noRival, Rivals } from "./boards.ts"
 import type { Stage } from "./contract.ts"
 import { createField, type Field } from "./field.ts"
 import { createGhost, type Ghost } from "./ghost.ts"
 import { palette } from "./palette.ts"
-import { createPassTags } from "./tags.ts"
+import { createPassMarks } from "./passes.ts"
 import { createMadeWith } from "./brand/made-with.ts"
 import { createHud, hudFont, hudLabelFont, panelAlpha } from "./hud.ts"
 import { createInput } from "./input.ts"
@@ -157,14 +158,13 @@ const steering = (): Steering => "car"
 
 const laps = createLaps(entry.id, loaded?.best ?? null, steering)
 const ghost = createGhost()
-// More ghosts beside the raced one: the board's runs just ahead, up to the player's pick (1, 5
-// or 10). Dev builds only: `?ghosts=100` races a crowd of bot laps instead, to see how many the
+// More ghosts beside the raced one: the board's runs the player added. Dev builds only: `?ghosts=100` races a crowd of bot laps instead, to see how many the
 // page can draw.
 // Dev builds only: `?rank=3` shows the car as if the player held that place on the board.
 const rankPreview = import.meta.env.DEV && params.has("rank") ? Number(params.get("rank")) || null : null
 const crowdCount = import.meta.env.DEV && params.has("ghosts") ? Math.max(0, Math.min(1000, Number(params.get("ghosts") || 100) || 0)) : 0
 const field = createField(stage.world, crowdCount > 0 ? { crowd: { track: entry.id, count: crowdCount } } : {})
-const passTags = createPassTags(stage, track)
+const passMarks = createPassMarks(stage, track)
 const online = createOnline({
   enabled: leaderboard !== null,
   run,
@@ -174,8 +174,8 @@ const online = createOnline({
   ghost,
   identity: loaded?.profile.identity ?? null,
   asked: loaded?.profile.asked ?? false,
-  rival: loaded?.rival ?? { version: 1, choice: { kind: "next" }, run: null },
-  field: loaded?.settings.ghosts ?? 1,
+  rival: loaded?.rival ?? noRival,
+  sectors: sectorCount(track),
   raceField: (runs) => {
     if (crowdCount === 0) field.set(runs)
   },
@@ -191,9 +191,9 @@ const panels = createPanels({
   switchTrack,
   shown: loaded?.settings.board ?? true,
   keep: (board) => void run(Settings.use((settings) => settings.change({ board }))),
-  keepField: (count) => void run(Settings.use((settings) => settings.change({ ghosts: count === 10 ? 10 : count === 5 ? 5 : 1 }))),
-  watch: (entry) => watchRun(entry),
-  splits: createSplits(online, Math.max(1, track.checkpoints.length))
+  watch: (entry, order) => watchRun(entry, order),
+  sectors: sectorCount(track),
+  splits: createSplits(online, sectorCount(track))
 })
 // The email sign-up, in the timing panel's place beside the replay of the player's own lap.
 const signup = createSignup({
@@ -214,9 +214,12 @@ let watchRequest = 0
  * folded away. Only starting again (`R`, which drops the replay like any reset) or another
  * run ends it.
  */
-const watchRun = (entry: Entry): void => {
+const watchRun = (entry: Entry, order: BoardOrder): void => {
   const request = ++watchRequest
-  const watched: WatchedRun = { runId: entry.runId, name: entry.name, rank: entry.rank, timeMs: entry.timeMs, mine: entry.mine }
+  // From a board by sector, only that sector, with its time there.
+  const sector = order !== null && entry.sectorsMs?.[order] !== undefined ? order : null
+  const timeMs = sector === null ? entry.timeMs : entry.sectorsMs?.[sector] ?? entry.timeMs
+  const watched: WatchedRun = { runId: entry.runId, name: entry.name, rank: entry.rank, timeMs, mine: entry.mine, sector }
   void online.replay(entry.runId).then((got) => {
     if (request !== watchRequest) return
     if (got === null || !rerun.start(got.replay, watched)) hud.toast("can't load that lap")
@@ -383,11 +386,14 @@ const loop = FixedLoop.start({
     actors.standing(watched?.rank ?? rankPreview ?? online.state().rank?.rank ?? null)
     actors.update(shown, ghostPose, seconds)
     field.update(shown, view.lap.phase === "running", watched === null)
-    const raced = watched === null ? ghost.current() : null
-    // Passing your own best gets no tag: it would only say your name, right over your car (the
-    // ghost drives your line), and the delta already tells you are ahead.
-    const racedTag = raced === null || raced.kind === "own" ? "" : raced.name
-    passTags.update(shown, raced === null ? field.ghosts() : [{ key: "raced", name: racedTag, color: palette.ghost, pose: ghostPose }, ...field.ghosts()], seconds)
+    // The lap the ghost drives now: a ghost by sector is its sector's driver.
+    const raced = watched === null ? ghost.leg(shown) : null
+    // Passing your own best is not marked: it drives your line, so the ring would be right
+    // under your car, and the delta already tells you are ahead. A ghost by sector is passed
+    // once in each sector, each its own driver.
+    const racedKey = ghost.current()?.kind === "sectors" ? `raced:${shown.lap.splitsMs.length}` : "raced"
+    const racedMark = { key: racedKey, marked: raced !== null && raced.kind !== "own", color: palette.ghost, pose: ghostPose }
+    passMarks.update(shown, raced === null ? field.ghosts() : [racedMark, ...field.ghosts()], seconds)
     hud.update(view, { pad: padLabel, car: shown.car, replay: watched !== null ? { kind: "run", run: watched } : replaying ? { kind: "lap" } : null }, seconds)
     panels.update(view.lap.phase === "running")
     signup.update(replaying && watched === null)
