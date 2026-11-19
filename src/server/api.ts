@@ -15,7 +15,7 @@ import * as HttpApiGroup from "effect/http-api/HttpApiGroup"
 import * as FileSystem from "effect/FileSystem"
 import * as Path from "effect/Path"
 import type { RateLimited } from "../api/contract.ts"
-import { LeaderboardApi, NameRefusedError, NameTakenError, NotFoundError, UnauthorisedError } from "../api/http.ts"
+import { LeaderboardApi, NameRefusedError, NameTakenError, NotFoundError, RunRefusedError, UnauthorisedError } from "../api/http.ts"
 import { type LeaderboardServer, readAuthorization, sameText } from "./leaderboard.ts"
 import { type Action, type Limiter, limits } from "./limits.ts"
 
@@ -52,11 +52,22 @@ export class AdminGroup extends HttpApiGroup.make("admin")
     })
   )
   .add(
-    HttpApiEndpoint.post("fillSectors", "/admin/sectors", {
+    HttpApiEndpoint.get("unfiled", "/admin/sectors", {
       headers: admin,
       query: { limit: Schema.optional(Schema.FiniteFromString) },
-      success: Schema.Struct({ filled: Schema.Number, failed: Schema.Number, left: Schema.Number }),
+      success: Schema.Struct({
+        left: Schema.Number,
+        runs: Schema.Array(Schema.Struct({ runId: Schema.String, track: Schema.String, timeMs: Schema.Number, replay: Schema.String }))
+      }),
       error: UnauthorisedError
+    })
+  )
+  .add(
+    HttpApiEndpoint.put("fileSectors", "/admin/runs/:runId/sectors", {
+      headers: admin,
+      params: { runId: Schema.String },
+      payload: Schema.Struct({ sectorsMs: Schema.Array(Schema.Number) }),
+      error: [UnauthorisedError, NotFoundError, RunRefusedError]
     })
   )
   .add(
@@ -159,8 +170,8 @@ export const serverLayer = <R>(options: ServeOptions<R>) => {
       .handle("runs", ({ headers, params, query }) =>
         asAdmin(headers.authorization, leaderboard.adminRuns(params.track, params.rules, Math.min(query.limit ?? 50, 500)))
       )
-      // Each run is driven again here: a few at a time, so one request stays well inside the Worker's CPU time.
-      .handle("fillSectors", ({ headers, query }) => asAdmin(headers.authorization, leaderboard.adminFillSectors(Math.max(1, Math.min(Math.floor(query.limit ?? 10), 50)))))
+      .handle("unfiled", ({ headers, query }) => asAdmin(headers.authorization, leaderboard.adminUnfiled(Math.max(1, Math.min(Math.floor(query.limit ?? 20), 50)))))
+      .handle("fileSectors", ({ headers, params, payload }) => asAdmin(headers.authorization, leaderboard.adminFileSectors(params.runId, payload.sectorsMs)))
       .handle("rename", ({ headers, params, payload }) =>
         asAdmin(headers.authorization, Effect.map(leaderboard.adminRename(params.playerId, payload.name), (name) => ({ name })))
       )

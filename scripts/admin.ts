@@ -9,14 +9,15 @@
  *   pnpm admin <stage> rename <playerId> <name>  gives a player another name (a kept-back one is allowed)
  *   pnpm admin <stage> remove-run <runId>        takes one run off its board
  *   pnpm admin <stage> ban <playerId>            the identity stops working, its runs go, the name stays taken
- *   pnpm admin <stage> fill-sectors              files the sectors of runs sent before the server kept them (once, after deploying them)
+ *   pnpm admin <stage> fill-sectors              drives the runs sent before the server kept sectors here, and files their sectors (once, after deploying them)
  *
  * `<stage>` is `dev`, `staging` or `prod`. See docs/server.md.
  */
 import { existsSync } from "node:fs"
 import { Effect, Exit } from "effect"
 import { makeAdminClient } from "../src/server/admin-client.ts"
-import { rulesVersion, tracks } from "../src/sim/index.ts"
+import { sectorCount, wholeSectors } from "../src/api/sectors.ts"
+import { replayFromText, rulesVersion, runReplay, trackById, tracks } from "../src/sim/index.ts"
 
 const [stage, command, ...rest] = process.argv.slice(2)
 const usage = (): never => {
@@ -84,15 +85,23 @@ switch (command) {
     break
   }
   case "fill-sectors": {
-    // A few runs a request, until none waits (or a pass files nothing new).
+    // Each run is driven here, on this machine (a replay costs about the Worker's whole CPU
+    // time), and its sectors filed; the server takes them only if they add up to its own time.
     let filled = 0
     let failed = 0
     for (;;) {
-      const pass = await run(admin.admin.fillSectors({ headers, query: { limit: 20 } }))
-      filled += pass.filled
-      failed += pass.failed
-      console.log(`filled ${filled}, could not drive ${failed}, ${pass.left} left`)
-      if (pass.left === 0 || pass.filled + pass.failed === 0) break
+      const batch = await run(admin.admin.unfiled({ headers, query: { limit: 50 } }))
+      if (batch.runs.length === 0) break
+      for (const one of batch.runs) {
+        const found = trackById(one.track)
+        const bytes = replayFromText(one.replay)
+        const lap = found === undefined || bytes === null ? null : runReplay(bytes, { ghost: false })
+        const sectorsMs = found !== undefined && lap !== null && lap.ok ? wholeSectors(lap.splitsMs, one.timeMs, sectorCount(found.data)) : []
+        if (sectorsMs.length === 0) failed++
+        else filled++
+        await run(admin.admin.fileSectors({ headers, params: { runId: one.runId }, payload: { sectorsMs } }))
+      }
+      console.log(`filled ${filled}, could not drive ${failed}, ${batch.left - batch.runs.length} left`)
     }
     break
   }
