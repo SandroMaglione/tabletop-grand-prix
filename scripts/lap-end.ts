@@ -266,7 +266,11 @@ await page.waitForTimeout(300)
 const rest = await signupState()
 check("it comes in once the wipe has left", cameAfter >= wipeLeavesMs - 100 && cameAfter <= wipeLeavesMs + 800, `${cameAfter} ms after the finish`)
 check("it comes in without taking the keyboard", !rest.focused && rest.bodyFocused)
-check("it sits in the timing panel's place, as wide as it, and smaller", Math.round(rest.top) === 12 && Math.round(rest.left) === 12 && rest.height < rest.width, `${rest.width}×${rest.height} at ${rest.left},${rest.top}`)
+// The timing panel's scale (`hud.ts`), and REPLAY's half width at it: about 54px before scaling.
+const hudScale = Math.max(0.72, Math.min(1, width / 1500, height / 840))
+const replayLeft = width / 2 - 54 * hudScale
+check("it sits in the timing panel's place, 330 wide at the HUD's scale, and smaller than the timing panel", Math.round(rest.top) === 12 && Math.round(rest.left) === 12 && Math.abs(rest.width - 330 * hudScale) < 1 && rest.height < 250 * hudScale, `${rest.width}×${rest.height} at ${rest.left},${rest.top}`)
+check("it keeps well clear of REPLAY at the top centre", rest.left + rest.width + 40 * hudScale < replayLeft, `right edge ${Math.round(rest.left + rest.width)}, REPLAY from about ${Math.round(replayLeft)}`)
 check("the board beside it has not moved", rest.board === boardBefore, `${rest.board} against ${boardBefore}`)
 check("the entrance has played out", rest.animations === 0)
 await picture("s2-at-rest")

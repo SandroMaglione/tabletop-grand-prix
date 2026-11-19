@@ -3,7 +3,7 @@
  * Typeonce Games ships its next game. It posts to the studio's sign-up endpoint, which sends
  * a confirmation email (`subscribe.ts`).
  *
- * It sits in the timing panel's place, top left, at the timing panel's width and scale, while
+ * It sits in the timing panel's place, top left, at the timing panel's scale (a little wider), while
  * that panel is away: during the replay of the player's own lap, from the second lap finished
  * in a visit, once the brand's wipe has left. It comes in with one short move and glint (`enter`;
  * none when the player asked for less motion) and goes when the replay does (`R`), or when the

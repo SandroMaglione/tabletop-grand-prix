@@ -1,13 +1,15 @@
 /*
  * The email sign-up (`signup.ts`): a panel of the leaderboard's kind (`panels.css`) in the
- * timing panel's place, top left, as wide as it and scaled like it. It grows downward only.
+ * timing panel's place, top left, scaled like it. A little wider than it (268px), so the line
+ * and the controls have room, and still well clear of REPLAY at the top centre at the
+ * smallest scale. It grows downward only.
  */
 .tgp-signup {
   position: fixed;
   top: 12px;
   left: 12px;
   z-index: 1;
-  width: 268px;
+  width: 330px;
   transform-origin: top left;
   color: var(--hud-text);
   font-family: "Chakra Petch", Eurostile, "Helvetica Neue", Arial, sans-serif;
